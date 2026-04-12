@@ -48,3 +48,42 @@ def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: 
         entry = new_entry
         
     return {"success": True, "id": entry.id}
+
+@router.get("/api/entries/history")
+def get_entry_history(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Return all entries with feedback summaries for the history timeline."""
+    import re
+    entries = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.user_id == user_id)
+        .order_by(models.JournalEntry.date.desc())
+        .all()
+    )
+    
+    result = []
+    for entry in entries:
+        # Strip HTML for preview
+        raw = re.sub(r'<[^>]*>?', '', entry.content or "")
+        preview = raw[:200].strip()
+        word_count = len(re.findall(r'[a-zA-Z]{2,}', raw))
+        
+        fb = entry.feedback
+        result.append({
+            "id": entry.id,
+            "date": entry.date.strftime("%Y-%m-%d"),
+            "preview": preview,
+            "wordCount": word_count,
+            "content": entry.content,
+            "feedback": {
+                "moodScore": fb.mood_score,
+                "sentiment": fb.sentiment,
+                "grammarScore": fb.grammar_score,
+                "topics": fb.topics,
+                "openLoops": fb.open_loops,
+                "grammarFixes": fb.grammar_fixes,
+                "cognitiveReframes": fb.cognitive_reframes,
+            } if fb else None,
+        })
+    
+    return {"entries": result}
+

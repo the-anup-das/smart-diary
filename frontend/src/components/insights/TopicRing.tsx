@@ -68,14 +68,14 @@ export function TopicRing({ data }: { data: TopicData }) {
   })
 
   return (
-    <div className="flex items-center gap-6">
+    <div className="flex flex-col sm:flex-row items-center gap-6">
       <svg viewBox={`0 0 ${size} ${size}`} className="w-[180px] h-[180px] flex-shrink-0">
         {segments.map((seg, i) => (
           <path key={i} d={seg.path} fill={seg.color} stroke="rgb(var(--background))" strokeWidth="2" className="transition-all duration-500 hover:opacity-80" />
         ))}
         {/* Center text */}
-        <text x={cx} y={cy - 4} textAnchor="middle" className="fill-gray-500 text-[10px] font-medium">Focus</text>
-        <text x={cx} y={cy + 12} textAnchor="middle" className="fill-gray-900 dark:fill-gray-100 text-[14px] font-bold">Topics</text>
+        <text x={cx} y={cy - 4} textAnchor="middle" fontSize="10" fontWeight="500" fill="#9ca3af">Focus</text>
+        <text x={cx} y={cy + 12} textAnchor="middle" fontSize="14" fontWeight="700" fill="currentColor">Topics</text>
       </svg>
 
       {/* Legend */}

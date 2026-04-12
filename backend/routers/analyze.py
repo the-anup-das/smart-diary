@@ -26,6 +26,10 @@ class CognitiveReframe(BaseModel):
     negativeThought: str
     reframe: str
 
+class TopicWeight(BaseModel):
+    topic: str = Field(description="Lowercase topic name (e.g. 'work', 'health', 'family', 'relationships', 'personal_growth', 'finances', 'creativity').")
+    weight: float = Field(description="Percentage weight as a float (0.0 to 1.0). All weights should sum to 1.0.")
+
 class FeedbackReportSchema(BaseModel):
     moodScore: int = Field(ge=1, le=10, description="Score the emotional state from 1 (Despair) to 10 (Euphoric).")
     sentiment: str = Field(description="A single word describing the core sentiment (Stressed, Joyful, Neutral, Anxious, Focused, Calm, etc).")
@@ -33,7 +37,7 @@ class FeedbackReportSchema(BaseModel):
     grammarFixes: list[GrammarFix] = Field(description="List of corrections. Empty array if perfect.")
     openLoops: list[str] = Field(description="List of actionable tasks, worries, or unresolved issues from the text.")
     cognitiveReframes: list[CognitiveReframe] = Field(description="CBT positive reframes for negative thoughts.")
-    topics: dict[str, float] = Field(description="Percentage breakdown of the entry's primary focus areas. Keys are lowercase topic names (e.g. 'work', 'health', 'family', 'relationships', 'personal_growth', 'finances', 'creativity'). Values are floats summing to 1.0.")
+    topics: list[TopicWeight] = Field(description="Percentage breakdown of the entry's primary focus areas. List of topic/weight pairs summing to 1.0.")
 
 def _tokenize(text: str) -> set[str]:
     """Extract lowercase alphabetic words from text."""
@@ -143,7 +147,7 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "open_loops": parsed.openLoops,
             "cognitive_reframes": [c.model_dump() for c in parsed.cognitiveReframes],
             "content_hash": content_hash,
-            "topics": parsed.topics,
+            "topics": {t.topic: t.weight for t in parsed.topics},
             "word_count": vocab_stats["word_count"],
             "unique_word_count": vocab_stats["unique_word_count"],
             "new_words": vocab_stats["new_words"],
