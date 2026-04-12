@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: diary-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: diary_user
+      POSTGRES_PASSWORD: diary_password
+      POSTGRES_DB: diary_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: diary-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /app/.venv # Prevent Windows Host .venv from over-writing the Linux container!
+    environment:
+      # Natively maps Docker PostgreSQL DNS directly to SQLAlchemy
+      - DATABASE_URL=postgresql://diary_user:diary_password@db:5432/diary_db
+      - JWT_SECRET=super-secret-diary-key-you-should-change
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: diary-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      # Local volume mounted for rapid React hot-reloading
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - INTERNAL_BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - JWT_SECRET=super-secret-diary-key-you-should-change
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

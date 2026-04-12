@@ -1,0 +1,12 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Install dependencies strictly
+COPY package*.json ./
+RUN npm install
+
+# Bind all source code explicitly for Live Reloading
+COPY . .
+
+EXPOSE 3000
+CMD ["npm", "run", "dev"]

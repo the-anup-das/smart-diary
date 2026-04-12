@@ -1,0 +1,22 @@
+# Next.js build output
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Windows path artifact (broken symlink from docker volume mount)
+CUsersawesomeDownloadsnotebookfrontend/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*

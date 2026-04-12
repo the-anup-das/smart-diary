@@ -1,0 +1,13 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Compiled Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Env files
+.env
+.env.*
+!.env.example

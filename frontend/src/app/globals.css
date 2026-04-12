@@ -1,0 +1,71 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-merriweather), ui-serif, Georgia, serif;
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+:root {
+  --background: #FAFAFA;
+  --foreground: #111827;
+  --card-bg: rgba(0, 0, 0, 0.03);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --primary: #8B5CF6;
+  --primary-hover: #7C3AED;
+  --success: #10B981;
+  --danger: #EF4444;
+}
+
+.dark {
+  --background: #0A0A0A;
+  --foreground: #F3F4F6;
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.08);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.glass-panel {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
+  border-radius: 1rem;
+}
+.dark .glass-panel {
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+}
+
+.glass-panel-hover {
+  transition: all 0.2s ease-in-out;
+}
+.glass-panel-hover:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+.dark .glass-panel-hover:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.15); border-radius: 10px; }
+.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
+.dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
