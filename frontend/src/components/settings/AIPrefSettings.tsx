@@ -101,6 +101,11 @@ export function AIPrefSettings() {
               checked={!!prefs?.hide_open_loops} 
               onChange={(val: any) => updatePref('hide_open_loops', val)} 
            />
+           <ToggleSwitch 
+              label="Hide Word Target" 
+              checked={!!prefs?.hide_word_target} 
+              onChange={(val: any) => updatePref('hide_word_target', val)} 
+           />
         </div>
 
 

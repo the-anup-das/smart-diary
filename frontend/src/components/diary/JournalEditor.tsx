@@ -10,14 +10,14 @@ import { MorningIntentions } from "./MorningIntentions"
 import { CheckCircle2, Trash } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 
-export function JournalEditor({ initialContent = "" }: { initialContent?: string }) {
+export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
   const [isSaving, setIsSaving] = React.useState(false)
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [processStage, setProcessStage] = React.useState<string>("")
   const [feedbackData, setFeedbackData] = React.useState<any>(null)
   const [aiError, setAiError] = React.useState<string | null>(null)
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null)
-  const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(null)
+  const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(initialId)
   const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
@@ -49,6 +49,8 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
       attributes: {
         class: 'prose dark:prose-invert prose-lg md:prose-xl max-w-none focus:outline-none min-h-[400px]',
       },
+      scrollThreshold: 200,
+      scrollMargin: 200,
     },
     onUpdate: ({ editor }) => {
       // Clear transient AI engine errors when the user resumes typing
@@ -189,7 +191,15 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
               <Trash className="w-4 h-4" />
             </button>
           )}
-          <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
+          {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
+            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
+              <span className="text-sm font-mono tracking-wide font-medium">
+                {wordCount} <span className={`opacity-60 font-normal ${wordCount >= preferences.targets.daily_words ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>/ {preferences.targets.daily_words} words</span>
+              </span>
+            </div>
+          ) : (
+            <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
+          )}
           <div className="flex items-center space-x-2 text-sm text-gray-500 font-medium bg-black/5 dark:bg-white/5 px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10">
             {isSaving ? (
               <>
@@ -210,7 +220,7 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
       <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
       
       <div className="flex-1 relative overflow-hidden group">
-        <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 py-4 custom-scrollbar overflow-y-auto`}>
+        <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 pt-4 pb-[300px] custom-scrollbar overflow-y-auto scroll-smooth scroll-pb-[200px]`}>
           <EditorContent editor={editor} />
         </div>
         {/* Subtle gradient overlay to fade text at bottom elegantly */}

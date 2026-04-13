@@ -24,8 +24,8 @@ def get_today_entry(user_id: str = Depends(verify_session), db: Session = Depend
     ).first()
     
     if not entry:
-        return {"content": ""}
-    return {"content": entry.content}
+        return {"content": "", "id": None}
+    return {"content": entry.content, "id": entry.id}
 
 @router.post("/api/entries")
 def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):

@@ -11,6 +11,7 @@ export default async function HomePage() {
   }
 
   let initialContent = "";
+  let initialId: string | null = null;
   let needsLogin = false;
   let backendOffline = false;
 
@@ -26,6 +27,7 @@ export default async function HomePage() {
     if (res.ok) {
         const data = await res.json();
         initialContent = data.content || "";
+        initialId = data.id || null;
     } else if (res.status === 401) {
         needsLogin = true;
     }
@@ -55,7 +57,7 @@ export default async function HomePage() {
   return (
     <div className="h-full w-full max-w-5xl mx-auto flex justify-center fade-in">
       {/* We pass the SSR fetched draft right back into Tiptap's payload */}
-      <JournalEditor initialContent={initialContent} />
+      <JournalEditor initialContent={initialContent} initialId={initialId} />
     </div>
   )
 }

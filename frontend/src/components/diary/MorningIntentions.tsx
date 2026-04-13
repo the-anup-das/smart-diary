@@ -1,6 +1,6 @@
 "use client"
 import * as React from "react"
-import { Sunrise, Sun, Sunset, Moon, Plus } from "lucide-react"
+import { Sunrise, Sun, Sunset, Moon, Plus, RotateCw } from "lucide-react"
 
 type TimeOfDay = "morning" | "afternoon" | "evening" | "night"
 
@@ -51,6 +51,7 @@ const TIME_CONFIG: Record<TimeOfDay, {
 
 export function MorningIntentions({ onSelect, isVisible }: { onSelect: (prompt: string) => void, isVisible: boolean }) {
   const [intentions, setIntentions] = React.useState<string[]>([])
+  const [openLoops, setOpenLoops] = React.useState<any[]>([])
   const [loading, setLoading] = React.useState(true)
   const [timeOfDay, setTimeOfDay] = React.useState<TimeOfDay>("morning")
 
@@ -70,6 +71,15 @@ export function MorningIntentions({ onSelect, isVisible }: { onSelect: (prompt: 
         setLoading(false)
       })
       .catch(() => setLoading(false))
+
+    fetch(`/api/open-loops`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.items) {
+          setOpenLoops(data.items)
+        }
+      })
+      .catch(() => {})
   }, [isVisible, timeOfDay])
 
   if (!isVisible) return null;
@@ -91,7 +101,22 @@ export function MorningIntentions({ onSelect, isVisible }: { onSelect: (prompt: 
          </div>
        ) : (
          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-           {intentions.map((prompt, i) => (
+           {openLoops.length > 0 && (
+             <button
+               onClick={() => onSelect(`Following up on: ${openLoops[0].text}`)}
+               className={`text-left p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5 hover:bg-indigo-500/10 cursor-pointer transition-all group flex flex-col justify-between`}
+             >
+               <div className="flex items-center space-x-2 mb-2 text-indigo-500 dark:text-indigo-400">
+                 <RotateCw className="w-4 h-4" />
+                 <span className="text-xs font-bold uppercase tracking-wider">Unresolved Thread</span>
+               </div>
+               <p className="text-sm text-gray-800 dark:text-gray-200 leading-snug line-clamp-3 mb-2">"{openLoops[0].text}"</p>
+               <span className={`text-xs font-semibold text-indigo-500 dark:text-indigo-400 flex items-center mt-auto opacity-0 group-hover:opacity-100 transition-opacity`}>
+                 <Plus className="w-3 h-3 mr-1" /> Use this prompt
+               </span>
+             </button>
+           )}
+           {intentions.slice(0, openLoops.length > 0 ? 2 : 3).map((prompt, i) => (
              <button
                key={i}
                onClick={() => onSelect(prompt)}

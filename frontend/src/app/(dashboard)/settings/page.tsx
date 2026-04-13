@@ -14,7 +14,6 @@ export default function SettingsPage() {
     { id: "profile", label: "Profile", icon: User },
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "ai", label: "AI Preferences", icon: Brain },
-    { id: "targets", label: "Targets", icon: Target },
     { id: "data", label: "Data & Security", icon: Shield },
   ];
 
@@ -50,7 +49,6 @@ export default function SettingsPage() {
           {activeTab === "profile" && <ProfileSettings />}
           {activeTab === "appearance" && <AppearanceSettings />}
           {activeTab === "ai" && <AIPrefSettings />}
-          {activeTab === "targets" && <TargetsSettings />}
           {activeTab === "data" && <DataSettings />}
         </main>
       </div>

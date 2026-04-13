@@ -261,6 +261,27 @@ def get_insights(
 class LoopAction(BaseModel):
     action: str  # "resolve", "dismiss", "pin", "reopen"
 
+@router.get("/api/open-loops")
+def get_open_loops(
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db)
+):
+    open_loops = (
+        db.query(models.OpenLoop)
+        .filter(
+            models.OpenLoop.user_id == user_id,
+            models.OpenLoop.status.in_(["open", "pinned"])
+        )
+        .order_by(
+            models.OpenLoop.status.desc(),
+            models.OpenLoop.detected_at.asc()
+        )
+        .limit(5)
+        .all()
+    )
+    return {"items": [{"id": loop.id, "text": loop.text, "status": loop.status} for loop in open_loops]}
+
+
 @router.patch("/api/open-loops/{loop_id}")
 def update_open_loop(
     loop_id: str,
