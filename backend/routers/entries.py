@@ -19,7 +19,8 @@ def get_today_entry(user_id: str = Depends(verify_session), db: Session = Depend
     entry = db.query(models.JournalEntry).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end
+        models.JournalEntry.date <= today_end,
+        models.JournalEntry.is_deleted == False
     ).first()
     
     if not entry:
@@ -34,7 +35,8 @@ def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: 
     entry = db.query(models.JournalEntry).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end
+        models.JournalEntry.date <= today_end,
+        models.JournalEntry.is_deleted == False
     ).first()
     
     if entry:
@@ -55,7 +57,7 @@ def get_entry_history(user_id: str = Depends(verify_session), db: Session = Depe
     import re
     entries = (
         db.query(models.JournalEntry)
-        .filter(models.JournalEntry.user_id == user_id)
+        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
         .order_by(models.JournalEntry.date.desc())
         .all()
     )
@@ -93,7 +95,7 @@ def get_entry_context(user_id: str = Depends(verify_session), db: Session = Depe
     # Find the most recent entry that has a feedback score
     latest_with_feedback = (
         db.query(models.JournalEntry)
-        .filter(models.JournalEntry.user_id == user_id)
+        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
         .join(models.FeedbackReport)
         .filter(models.FeedbackReport.mood_score.isnot(None))
         .order_by(models.JournalEntry.date.desc())
@@ -114,7 +116,7 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
     recent_limit = datetime.utcnow() - timedelta(days=3)
     recent_entries = (
         db.query(models.JournalEntry)
-        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.date >= recent_limit)
+        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.date >= recent_limit, models.JournalEntry.is_deleted == False)
         .join(models.FeedbackReport)
         .all()
     )
@@ -133,7 +135,8 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
         db.query(models.JournalEntry)
         .filter(
             models.JournalEntry.user_id == user_id,
-            models.JournalEntry.date < echo_threshold
+            models.JournalEntry.date < echo_threshold,
+            models.JournalEntry.is_deleted == False
         )
         .join(models.FeedbackReport)
         .filter(models.FeedbackReport.sentiment == dominant_sentiment)
@@ -156,3 +159,14 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
             "similarity_reason": f"You also felt '{dominant_sentiment}' on this day."
         }
     }
+
+@router.delete("/api/entries/{id}")
+def soft_delete_entry(id: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    entry = db.query(models.JournalEntry).filter(models.JournalEntry.id == id, models.JournalEntry.user_id == user_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    
+    entry.is_deleted = True
+    entry.deleted_at = datetime.utcnow()
+    db.commit()
+    return {"success": True}

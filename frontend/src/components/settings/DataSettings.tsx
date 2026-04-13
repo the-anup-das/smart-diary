@@ -3,10 +3,50 @@ import * as React from "react"
 import { Button } from "@/components/ui/Button"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card"
 import { Download, AlertTriangle } from "lucide-react"
+import { ToggleSwitch } from "@/components/ui/ToggleSwitch"
 
 export function DataSettings() {
   const [exporting, setExporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  const [prefs, setPrefs] = React.useState<any>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [saveMessage, setSaveMessage] = React.useState("")
+
+  React.useEffect(() => {
+    fetch("/api/users/me")
+      .then(res => res.json())
+      .then(data => {
+        if (!data.detail) {
+          setPrefs(data.preferences || {})
+        }
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [])
+
+  const handleUpdateDeletionPref = async (val: boolean) => {
+    const newPrefs = { ...prefs, enable_deletion: val }
+    setPrefs(newPrefs)
+    setSaving(true)
+    setSaveMessage("")
+    try {
+      const res = await fetch("/api/users/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: newPrefs })
+      })
+      if (res.ok) {
+        setSaveMessage("Saved")
+        setTimeout(() => setSaveMessage(""), 2000)
+      } else {
+        setSaveMessage("Error saving")
+      }
+    } catch (e) {
+      setSaveMessage("Error")
+    }
+    setSaving(false)
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -73,14 +113,33 @@ export function DataSettings() {
           </CardTitle>
           <p className="text-sm text-gray-500">Permanently delete your account and erase all data. This cannot be reversed.</p>
         </CardHeader>
-        <CardContent>
-          <button 
-             onClick={handleDelete} 
-             disabled={deleting} 
-             className="inline-flex h-11 px-8 items-center justify-center rounded-md font-medium transition-all bg-red-600 text-white hover:bg-red-700 shadow-lg hover:shadow-red-500/20 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
-          >
-            {deleting ? "Deleting..." : "Delete Account"}
-          </button>
+        <CardContent className="space-y-6">
+          <div className="pt-2">
+            <ToggleSwitch 
+              label="Enable Entry Deletion" 
+              description="Allow removing individual entries from your history (with 3-month safety net)."
+              checked={!!prefs?.enable_deletion} 
+              onChange={handleUpdateDeletionPref} 
+            />
+            <div className="h-4">
+              {saving && <p className="text-xs text-primary animate-pulse flex items-center"><span className="mr-1.5 w-1.5 h-1.5 rounded-full bg-primary animate-ping" /> Saving...</p>}
+              {saveMessage && <p className={`text-xs ${saveMessage.includes('Error') ? 'text-red-500' : 'text-green-500'} fade-in flex items-center`}>
+                {!saveMessage.includes('Error') && <span className="mr-1.5">✓</span>}
+                {saveMessage}
+              </p>}
+            </div>
+          </div>
+
+          <div className="pt-6 border-t border-red-500/10">
+            <p className="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">Account Destruction</p>
+            <button 
+              onClick={handleDelete} 
+              disabled={deleting} 
+              className="inline-flex h-11 px-8 items-center justify-center rounded-md font-medium transition-all bg-red-600 text-white hover:bg-red-700 shadow-lg hover:shadow-red-500/20 hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
+            >
+              {deleting ? "Deleting..." : "Delete Account"}
+            </button>
+          </div>
         </CardContent>
       </Card>
     </div>

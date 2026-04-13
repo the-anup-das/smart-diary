@@ -7,7 +7,8 @@ import Image from '@tiptap/extension-image'
 import { FeedbackDashboard } from "./FeedbackDashboard"
 import { EchoesWidget } from "./EchoesWidget"
 import { MorningIntentions } from "./MorningIntentions"
-import { CheckCircle2 } from "lucide-react"
+import { CheckCircle2, Trash } from "lucide-react"
+import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 
 export function JournalEditor({ initialContent = "" }: { initialContent?: string }) {
   const [isSaving, setIsSaving] = React.useState(false)
@@ -16,8 +17,10 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
   const [feedbackData, setFeedbackData] = React.useState<any>(null)
   const [aiError, setAiError] = React.useState<string | null>(null)
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null)
+  const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(null)
   const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
   const [preferences, setPreferences] = React.useState<any>({})
+  const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
 
   React.useEffect(() => {
@@ -64,6 +67,8 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
             body: JSON.stringify({ content: htmlContent })
           });
           if (res.ok) {
+            const resData = await res.json();
+            setCurrentEntryId(resData.id);
             setIsSaving(false);
             setLastSaved(new Date());
           } else {
@@ -134,6 +139,23 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
     }
   }
 
+  async function handleDelete() {
+    if (!currentEntryId) return;
+    setShowDeleteModal(true);
+  }
+
+  async function confirmDelete() {
+    if (!currentEntryId) return;
+    const res = await fetch(`/api/entries/${currentEntryId}`, { method: 'DELETE' });
+    if (res.ok) {
+      editor?.commands.setContent("");
+      setCurrentEntryId(null);
+      setFeedbackData(null);
+      setLastSaved(null);
+      setShowDeleteModal(false);
+    }
+  }
+
   // Cleanup timeout on unmount
   React.useEffect(() => {
     return () => {
@@ -158,6 +180,15 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </h1>
         <div className="flex items-center space-x-4 fade-in">
+          {preferences?.enable_deletion && currentEntryId && (
+            <button 
+              onClick={handleDelete}
+              className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer group"
+              title="Delete Current Entry"
+            >
+              <Trash className="w-4 h-4" />
+            </button>
+          )}
           <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
           <div className="flex items-center space-x-2 text-sm text-gray-500 font-medium bg-black/5 dark:bg-white/5 px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10">
             {isSaving ? (
@@ -227,6 +258,17 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
       )}
 
       <FeedbackDashboard feedback={feedbackData} preferences={preferences} onClose={() => setFeedbackData(null)} />
+
+      {showDeleteModal && (
+        <DeleteConfirmationModal
+          entry={{ 
+            id: currentEntryId || "", 
+            date: new Date().toISOString().split('T')[0] 
+          }}
+          onCancel={() => setShowDeleteModal(false)}
+          onConfirm={confirmDelete}
+        />
+      )}
     </div>
   )
 }

@@ -1,7 +1,9 @@
 "use client"
 import * as React from "react"
-import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, BookOpen, FileText } from "lucide-react"
+import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, BookOpen, FileText, Trash2, AlertTriangle, X } from "lucide-react"
+import { DeleteConfirmationModal } from "@/components/diary/DeleteConfirmationModal"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
+import { ReadOnlyEditor } from "@/components/diary/ReadOnlyEditor"
 
 interface EntryData {
   id: string
@@ -20,14 +22,16 @@ interface EntryData {
   } | null
 }
 
-type ViewMode = "month" | "year" | "all"
+type ViewMode = "month" | "year"
 
 export default function HistoryPage() {
   const [entries, setEntries] = React.useState<EntryData[]>([])
   const [loading, setLoading] = React.useState(true)
   const [expandedId, setExpandedId] = React.useState<string | null>(null)
-  const [showFullTextId, setShowFullTextId] = React.useState<string | null>(null)
   const [viewMode, setViewMode] = React.useState<ViewMode>("month")
+  const [preferences, setPreferences] = React.useState<any>({})
+  const [selectedEntry, setSelectedEntry] = React.useState<EntryData | null>(null)
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = React.useState<EntryData | null>(null)
   const [currentMonth, setCurrentMonth] = React.useState(() => {
     const now = new Date()
     return { year: now.getFullYear(), month: now.getMonth() }
@@ -43,6 +47,12 @@ export default function HistoryPage() {
         if (res.ok) {
           const json = await res.json()
           setEntries(json.entries || [])
+        }
+        
+        const prefRes = await fetch('/api/users/me')
+        if (prefRes.ok) {
+          const prefJson = await prefRes.json()
+          setPreferences(prefJson.preferences || {})
         }
       } catch {}
       finally { setLoading(false) }
@@ -61,7 +71,6 @@ export default function HistoryPage() {
 
   // Filter entries for the timeline below calendar
   const filteredEntries = React.useMemo(() => {
-    if (viewMode === "all") return entries
     if (viewMode === "year") {
       return entries.filter(e => {
         const d = new Date(e.date + 'T00:00:00')
@@ -79,7 +88,6 @@ export default function HistoryPage() {
     const entry = entryMap.get(date)
     if (!entry) return
     setExpandedId(entry.id)
-    setShowFullTextId(null)
     setTimeout(() => {
       const el = entryRefs.current.get(entry.id)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -89,7 +97,6 @@ export default function HistoryPage() {
   const viewModes: { key: ViewMode; label: string }[] = [
     { key: "month", label: "Month" },
     { key: "year", label: "Year" },
-    { key: "all", label: "All Time" },
   ]
 
   return (
@@ -176,9 +183,6 @@ export default function HistoryPage() {
                 onNext={() => setCurrentYear(y => y + 1)}
               />
             )}
-            {viewMode === "all" && (
-              <AllTimeCalendar entryMap={entryMap} onDayClick={handleDayClick} />
-            )}
 
             {/* Color Guide */}
             <MoodColorGuide />
@@ -190,7 +194,6 @@ export default function HistoryPage() {
               <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide px-1">
                 {viewMode === "month" && new Date(currentMonth.year, currentMonth.month).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                 {viewMode === "year" && `${currentYear}`}
-                {viewMode === "all" && "All Entries"}
                 {' '} · {filteredEntries.length} {filteredEntries.length === 1 ? 'entry' : 'entries'}
               </h3>
               {filteredEntries.map(entry => (
@@ -198,9 +201,10 @@ export default function HistoryPage() {
                   <EntryCard
                     entry={entry}
                     isExpanded={expandedId === entry.id}
-                    showFullText={showFullTextId === entry.id}
-                    onToggle={() => { setExpandedId(expandedId === entry.id ? null : entry.id); setShowFullTextId(null) }}
-                    onToggleFullText={() => setShowFullTextId(showFullTextId === entry.id ? null : entry.id)}
+                    onToggle={() => { setExpandedId(expandedId === entry.id ? null : entry.id) }}
+                    onReadFull={() => setSelectedEntry(entry)}
+                    preferences={preferences}
+                    onDelete={(id, date) => setConfirmDeleteEntry(entry)}
                   />
                 </div>
               ))}
@@ -209,6 +213,30 @@ export default function HistoryPage() {
             <p className="text-center text-gray-400 py-8">No entries in this period.</p>
           )}
         </div>
+      )}
+
+      {/* Full Entry Modal Overlay */}
+      {selectedEntry && (
+        <FullEntryModal 
+          entry={selectedEntry} 
+          onClose={() => setSelectedEntry(null)} 
+          preferences={preferences}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {confirmDeleteEntry && (
+        <DeleteConfirmationModal
+          entry={confirmDeleteEntry}
+          onCancel={() => setConfirmDeleteEntry(null)}
+          onConfirm={async () => {
+            const res = await fetch(`/api/entries/${confirmDeleteEntry.id}`, { method: 'DELETE' })
+            if (res.ok) {
+              setEntries(prev => prev.filter(e => e.id !== confirmDeleteEntry.id))
+            }
+            setConfirmDeleteEntry(null)
+          }}
+        />
       )}
     </div>
   )
@@ -370,38 +398,6 @@ function MiniMonth({ year, month, entryMap, onDayClick }: {
   )
 }
 
-// ============================
-// ALL TIME (list of year sections)
-// ============================
-function AllTimeCalendar({ entryMap, onDayClick }: {
-  entryMap: Map<string, EntryData>;
-  onDayClick: (date: string) => void;
-}) {
-  const years = React.useMemo(() => {
-    const ys = new Set<number>()
-    for (const key of entryMap.keys()) {
-      ys.add(new Date(key + 'T00:00:00').getFullYear())
-    }
-    return Array.from(ys).sort((a, b) => b - a)
-  }, [entryMap])
-
-  if (years.length === 0) return <p className="text-gray-500 text-sm text-center py-4">No entries found.</p>
-
-  return (
-    <div className="space-y-8">
-      {years.map(year => (
-        <div key={year}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">{year}</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {Array.from({ length: 12 }).map((_, month) => (
-              <MiniMonth key={month} year={year} month={month} entryMap={entryMap} onDayClick={onDayClick} />
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 // ============================
 // COLOR GUIDE
@@ -442,9 +438,10 @@ function MoodColorGuide() {
 // ============================
 // ENTRY CARD
 // ============================
-function EntryCard({ entry, isExpanded, showFullText, onToggle, onToggleFullText }: {
-  entry: EntryData; isExpanded: boolean; showFullText: boolean;
-  onToggle: () => void; onToggleFullText: () => void;
+function EntryCard({ entry, isExpanded, onToggle, onReadFull, preferences, onDelete }: {
+  entry: EntryData; isExpanded: boolean;
+  onToggle: () => void; onReadFull: () => void;
+  preferences: any; onDelete: (id: string, date: string) => void;
 }) {
   const fb = entry.feedback
   const moodTier = fb ? getMoodTier(fb.moodScore) : null
@@ -455,9 +452,12 @@ function EntryCard({ entry, isExpanded, showFullText, onToggle, onToggleFullText
 
   return (
     <div className="rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-lg overflow-hidden transition-all duration-300">
-      <button
+      <div
         onClick={onToggle}
-        className="w-full flex items-center justify-between p-4 lg:p-5 cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors text-left"
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        role="button"
+        tabIndex={0}
+        className="w-full flex items-center justify-between p-4 lg:p-5 cursor-pointer hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors text-left focus:outline-none focus:ring-2 focus:ring-primary/20"
       >
         <div className="flex items-center space-x-4 flex-1 min-w-0">
           {moodTier ? (
@@ -479,11 +479,20 @@ function EntryCard({ entry, isExpanded, showFullText, onToggle, onToggleFullText
             <p className="text-sm text-gray-500 truncate">{entry.preview || "No content"}</p>
           </div>
           <div className="flex items-center space-x-3 flex-shrink-0 ml-2">
+            {preferences?.enable_deletion && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(entry.id, entry.date) }}
+                className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer mr-1 focus:outline-none focus:ring-2 focus:ring-red-500/40"
+                title="Delete Entry"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
             <span className="text-xs text-gray-400 font-mono">{entry.wordCount}w</span>
             {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
           </div>
         </div>
-      </button>
+      </div>
 
       {isExpanded && (
         <div className="border-t border-black/5 dark:border-white/5 p-4 lg:p-6 space-y-4 fade-in">
@@ -535,19 +544,13 @@ function EntryCard({ entry, isExpanded, showFullText, onToggle, onToggleFullText
 
           <div className="pt-2 border-t border-black/5 dark:border-white/5">
             <button
-              onClick={onToggleFullText}
+              onClick={onReadFull}
               className="flex items-center space-x-2 text-sm text-primary hover:text-primary/80 font-medium cursor-pointer transition-colors"
             >
               <FileText className="w-4 h-4" />
-              <span>{showFullText ? "Hide full entry" : "Read full entry"}</span>
-              {showFullText ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <span>Read full entry</span>
+              <ChevronRight className="w-3 h-3 ml-1" />
             </button>
-            {showFullText && (
-              <div
-                className="mt-3 p-4 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] border border-black/5 dark:border-white/5 prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300 fade-in"
-                dangerouslySetInnerHTML={{ __html: entry.content }}
-              />
-            )}
           </div>
         </div>
       )}
@@ -573,3 +576,63 @@ function GlassCard({ children }: { children: React.ReactNode }) {
     </div>
   )
 }
+
+// ============================
+// FULL ENTRY MODAL
+// ============================
+function FullEntryModal({ entry, onClose, preferences }: { 
+  entry: EntryData; 
+  onClose: () => void; 
+  preferences: any;
+}) {
+  const dateLabel = new Date(entry.date + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+  })
+
+  // Prevent background scrolling
+  React.useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = 'unset' }
+  }, [])
+
+  // Close on Escape
+  React.useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-[100] flex flex-col bg-background/80 backdrop-blur-2xl fade-in overflow-hidden">
+      {/* Modal Header - Matches JournalEditor exactly */}
+      <div className="w-full max-w-5xl mx-auto pt-10 px-4 lg:px-8 flex justify-between items-center mb-10">
+        <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100">
+          {dateLabel}
+        </h1>
+        <div className="flex items-center space-x-4">
+          <span className="text-sm text-gray-400 font-mono tracking-wide">{entry.wordCount} words</span>
+          <button 
+            onClick={onClose}
+            className="p-2 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-all cursor-pointer"
+            title="Close"
+          >
+            <ChevronDown className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Editor Content - Matches JournalEditor structure */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <div className="max-w-5xl mx-auto h-full pb-32">
+          <ReadOnlyEditor content={entry.content} typography={preferences?.typography} />
+        </div>
+      </div>
+      
+      {/* Bottom Gradient Overlay */}
+      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-background to-transparent pointer-events-none"></div>
+    </div>
+  )
+}
+

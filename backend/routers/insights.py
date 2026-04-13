@@ -68,7 +68,8 @@ def get_insights(
         db.query(models.JournalEntry)
         .filter(
             models.JournalEntry.user_id == user_id,
-            models.JournalEntry.date >= start_date
+            models.JournalEntry.date >= start_date,
+            models.JournalEntry.is_deleted == False
         )
         .order_by(models.JournalEntry.date.asc())
         .all()
@@ -126,7 +127,8 @@ def get_insights(
     # Compute streak (consecutive days with entries, counting backwards from today)
     streak = 0
     all_user_entries = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id
+        models.JournalEntry.user_id == user_id,
+        models.JournalEntry.is_deleted == False
     ).all()
     if all_user_entries:
         check_date = datetime.utcnow().date()

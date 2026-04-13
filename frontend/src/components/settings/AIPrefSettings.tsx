@@ -2,25 +2,8 @@
 import * as React from "react"
 import { Button } from "@/components/ui/Button"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card"
+import { ToggleSwitch } from "@/components/ui/ToggleSwitch"
 
-function ToggleSwitch({ checked, onChange, label, description }: any) {
-  return (
-    <div className="flex items-center justify-between py-3">
-      <div>
-        <p className="font-medium text-sm text-gray-900 dark:text-gray-100">{label}</p>
-        {description && <p className="text-xs text-gray-500">{description}</p>}
-      </div>
-      <button
-        onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/50 ${checked ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-700'}`}
-      >
-        <span
-          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${checked ? 'translate-x-5' : 'translate-x-0'}`}
-        />
-      </button>
-    </div>
-  )
-}
 
 export function AIPrefSettings() {
   const [prefs, setPrefs] = React.useState<any>(null)
@@ -119,6 +102,7 @@ export function AIPrefSettings() {
               onChange={(val: any) => updatePref('hide_open_loops', val)} 
            />
         </div>
+
 
         <div className="pt-4 border-t border-black/5 dark:border-white/5 flex justify-end items-center">
           {saveMessage && <span className={`text-sm mr-4 ${saveMessage.includes('Failed') ? 'text-red-500' : 'text-green-500'} animate-in fade-in`}>{saveMessage}</span>}

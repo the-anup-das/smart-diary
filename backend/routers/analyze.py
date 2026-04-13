@@ -102,7 +102,8 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     entry = db.query(models.JournalEntry).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end
+        models.JournalEntry.date <= today_end,
+        models.JournalEntry.is_deleted == False
     ).first()
     
     raw_text = re.sub(r'<[^>]*>?', '', entry.content) if entry else ""
@@ -204,21 +205,49 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
 class DailyIntentionsSchema(BaseModel):
     intentions: list[str] = Field(description="List of 3 journaling prompts.")
 
+TIME_OF_DAY_CONFIG = {
+    "morning": {
+        "persona": "You are a serene morning journaling assistant. Generate exactly 3 insightful, energising journaling prompts to help the user set clear intentions and start their day with purpose.",
+        "cache_key": "morning",
+    },
+    "afternoon": {
+        "persona": "You are a midday check-in journaling coach. Generate exactly 3 reflective journaling prompts to help the user assess their progress, refocus energy, and stay grounded through the rest of the day.",
+        "cache_key": "afternoon",
+    },
+    "evening": {
+        "persona": "You are a calming evening journaling guide. Generate exactly 3 warm, reflective journaling prompts to help the user wind down, appreciate the day's moments, and process their emotions before nightfall.",
+        "cache_key": "evening",
+    },
+    "night": {
+        "persona": "You are a gentle night journaling companion. Generate exactly 3 peaceful, introspective journaling prompts to help the user release the day's weight, find gratitude, and ease into restful sleep.",
+        "cache_key": "night",
+    },
+}
+
 @router.get("/api/analyze/intentions")
-def get_morning_intentions(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+def get_intentions(
+    time_of_day: str = "morning",
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db)
+):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
+    # Normalise and fallback
+    tod = time_of_day.lower() if time_of_day.lower() in TIME_OF_DAY_CONFIG else "morning"
+    config = TIME_OF_DAY_CONFIG[tod]
+
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     prefs = user.preferences or {}
-    
-    # 1. Check Cache
-    cached_intentions = prefs.get("daily_intentions", {})
-    if cached_intentions.get("date") == date_str and "prompts" in cached_intentions:
-        return {"intentions": cached_intentions["prompts"], "cached": True}
-        
-    # 2. Fetch Open Loops
+
+    # Cache key is per-slot-per-day e.g. "daily_intentions_evening"
+    cache_field = f"daily_intentions_{config['cache_key']}"
+    cached = prefs.get(cache_field, {})
+    if cached.get("date") == date_str and "prompts" in cached:
+        return {"intentions": cached["prompts"], "cached": True, "time_of_day": tod}
+
+    # Fetch Open Loops for personalisation
     open_loops_objects = (
         db.query(models.OpenLoop)
         .filter(models.OpenLoop.user_id == user_id, models.OpenLoop.status.in_(["open", "pinned"]))
@@ -227,12 +256,11 @@ def get_morning_intentions(user_id: str = Depends(verify_session), db: Session =
         .all()
     )
     loop_texts = [l.text for l in open_loops_objects]
-    
-    # 3. Prompt OpenAI
-    system_instruction = "You are a serene morning journaling assistant. Generate exactly 3 insightful, reflective journaling prompts for the user to start their day."
+
+    system_instruction = config["persona"]
     if loop_texts:
-        system_instruction += f" Base the prompts on resolving or thinking through these current anxieties/tasks instead of generic advice: {', '.join(loop_texts)}."
-    
+        system_instruction += f" Where relevant, weave in these unresolved thoughts/tasks the user has been carrying: {', '.join(loop_texts)}."
+
     try:
         response = client.beta.chat.completions.parse(
             model="gpt-4o-mini",
@@ -241,20 +269,35 @@ def get_morning_intentions(user_id: str = Depends(verify_session), db: Session =
             temperature=0.7
         )
         prompts = response.choices[0].message.parsed.intentions
-        
-        # 4. Save to Cache
-        cached_intentions = {"date": date_str, "prompts": prompts}
+
         new_prefs = dict(prefs)
-        new_prefs["daily_intentions"] = cached_intentions
+        new_prefs[cache_field] = {"date": date_str, "prompts": prompts}
         user.preferences = new_prefs
         db.commit()
-        
-        return {"intentions": prompts, "cached": False}
+
+        return {"intentions": prompts, "cached": False, "time_of_day": tod}
     except Exception as e:
         print("Intentions generation failed:", e)
-        fallback = [
-            "What is one small thing I can do today to make progress?",
-            "What am I worrying about that is outside of my control?",
-            "How can I be kind to myself today?"
-        ]
-        return {"intentions": fallback, "cached": False, "error": str(e)}
+        fallbacks = {
+            "morning": [
+                "What intention do I want to set for today?",
+                "What am I looking forward to most this morning?",
+                "What would make today feel meaningful?",
+            ],
+            "afternoon": [
+                "How has my energy shifted since this morning?",
+                "What's one thing I can let go of to refocus?",
+                "What small win can I celebrate from the first half of today?",
+            ],
+            "evening": [
+                "What moments from today am I grateful for?",
+                "How did I show up for myself or others today?",
+                "What do I want to feel before I sleep tonight?",
+            ],
+            "night": [
+                "What thought do I want to release before I sleep?",
+                "What is one thing that went well today, however small?",
+                "What gentle intention do I want to carry into tomorrow?",
+            ],
+        }
+        return {"intentions": fallbacks[tod], "cached": False, "time_of_day": tod, "error": str(e)}
