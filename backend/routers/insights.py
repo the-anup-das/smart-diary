@@ -244,7 +244,7 @@ def get_insights(
             "totalResolved": total_resolved,
         },
         "targets": {
-            "daily_words": { "current": sum(e.word_count for e in timeline if e["date"] == datetime.utcnow().strftime("%Y-%m-%d")), "target": targets["daily_words"] },
+            "daily_words": { "current": sum(e["wordCount"] for e in timeline if e["date"] == datetime.utcnow().strftime("%Y-%m-%d")), "target": targets["daily_words"] },
             "target_mood": { "current": round(total_mood / analyzed_count, 1) if analyzed_count else 0, "target": targets["target_mood"] },
             "weekly_vocab": { "current": len(set(all_new_words)), "target": targets["weekly_vocab"] },
             "consistency_streak": { "current": streak, "target": targets["consistency_streak"] },
