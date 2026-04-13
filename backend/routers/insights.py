@@ -51,6 +51,18 @@ def get_insights(
 ):
     start_date = _get_date_range(range)
     
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    prefs = user.preferences or {} if user else {}
+    targets = prefs.get("targets", {
+        "daily_words": 200,
+        "target_mood": 7,
+        "weekly_vocab": 10,
+        "consistency_streak": 5,
+        "weekly_loops": 3,
+        "weekly_reframes": 3,
+        "sentiment_diversity": 3
+    })
+    
     # Fetch all entries with feedback in the date range
     entries = (
         db.query(models.JournalEntry)
@@ -69,6 +81,7 @@ def get_insights(
     total_mood = 0
     total_grammar = 0
     analyzed_count = 0
+    total_reframes = 0
     all_new_words = []
     
     for entry in entries:
@@ -79,6 +92,9 @@ def get_insights(
         analyzed_count += 1
         total_mood += (fb.mood_score or 0)
         total_grammar += (fb.grammar_score or 0)
+        
+        if fb.cognitive_reframes:
+            total_reframes += len(fb.cognitive_reframes)
         
         # Sentiment distribution
         sent = fb.sentiment or "Unknown"
@@ -227,6 +243,15 @@ def get_insights(
             "totalOpen": total_open,
             "totalResolved": total_resolved,
         },
+        "targets": {
+            "daily_words": { "current": sum(e.word_count for e in timeline if e["date"] == datetime.utcnow().strftime("%Y-%m-%d")), "target": targets["daily_words"] },
+            "target_mood": { "current": round(total_mood / analyzed_count, 1) if analyzed_count else 0, "target": targets["target_mood"] },
+            "weekly_vocab": { "current": len(set(all_new_words)), "target": targets["weekly_vocab"] },
+            "consistency_streak": { "current": streak, "target": targets["consistency_streak"] },
+            "weekly_loops": { "current": total_resolved, "target": targets["weekly_loops"] },
+            "weekly_reframes": { "current": total_reframes, "target": targets["weekly_reframes"] },
+            "sentiment_diversity": { "current": len([s for s in sentiments if s != "—" and s != "Neutral"]), "target": targets["sentiment_diversity"] },
+        }
     }
 
 

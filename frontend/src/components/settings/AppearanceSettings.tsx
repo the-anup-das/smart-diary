@@ -9,6 +9,7 @@ export function AppearanceSettings() {
   const [mounted, setMounted] = React.useState(false)
   const [typography, setTypography] = React.useState("sans")
   const [saving, setSaving] = React.useState(false)
+  const [saveMessage, setSaveMessage] = React.useState("")
 
   React.useEffect(() => {
     setMounted(true)
@@ -24,15 +25,18 @@ export function AppearanceSettings() {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveMessage("")
     try {
       await fetch("/api/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preferences: { typography } })
       })
-      alert("Appearance preferences updated successfully")
+      setSaveMessage("Appearance updated successfully!")
+      setTimeout(() => setSaveMessage(""), 3000)
     } catch (e) {
-      alert("Failed to update preferences")
+      setSaveMessage("Failed to update appearance.")
+      setTimeout(() => setSaveMessage(""), 3000)
     }
     setSaving(false)
   }
@@ -94,7 +98,8 @@ export function AppearanceSettings() {
           </div>
         </div>
 
-        <div className="pt-4 border-t border-black/5 dark:border-white/5 flex justify-end">
+        <div className="pt-4 border-t border-black/5 dark:border-white/5 flex justify-end items-center">
+          {saveMessage && <span className={`text-sm mr-4 ${saveMessage.includes('Failed') ? 'text-red-500' : 'text-green-500'} animate-in fade-in`}>{saveMessage}</span>}
           <Button onClick={handleSave} disabled={saving} className="px-6">
             {saving ? "Saving..." : "Save Changes"}
           </Button>

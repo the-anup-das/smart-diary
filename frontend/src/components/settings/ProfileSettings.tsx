@@ -8,6 +8,7 @@ export function ProfileSettings() {
   const [profile, setProfile] = React.useState({ name: "", email: "" })
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
+  const [saveMessage, setSaveMessage] = React.useState("")
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -26,15 +27,18 @@ export function ProfileSettings() {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveMessage("")
     try {
       await fetch("/api/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile)
       })
-      alert("Profile updated successfully")
+      setSaveMessage("Profile updated successfully!")
+      setTimeout(() => setSaveMessage(""), 3000)
     } catch (e) {
-      alert("Failed to update profile")
+      setSaveMessage("Failed to update profile.")
+      setTimeout(() => setSaveMessage(""), 3000)
     }
     setSaving(false)
   }
@@ -67,7 +71,8 @@ export function ProfileSettings() {
             className="w-full md:w-2/3"
           />
         </div>
-        <div className="pt-4 border-t border-black/5 dark:border-white/5 flex justify-end">
+        <div className="pt-4 border-t border-black/5 dark:border-white/5 flex justify-end items-center">
+          {saveMessage && <span className={`text-sm mr-4 ${saveMessage.includes('Failed') ? 'text-red-500' : 'text-green-500'} animate-in fade-in`}>{saveMessage}</span>}
           <Button onClick={handleSave} disabled={saving} className="px-6">
             {saving ? "Saving..." : "Save Changes"}
           </Button>

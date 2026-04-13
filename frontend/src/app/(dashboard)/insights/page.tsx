@@ -3,6 +3,7 @@ import * as React from "react"
 import { MoodChart } from "@/components/insights/MoodChart"
 import { TopicRing } from "@/components/insights/TopicRing"
 import { VocabChart } from "@/components/insights/VocabChart"
+import { TargetsWidget } from "@/components/insights/TargetsWidget"
 import { TrendingUp, TrendingDown, Brain, BookOpen, Flame, BarChart2, Check, X, Pin, Sparkles } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
@@ -37,6 +38,7 @@ interface InsightsData {
     totalOpen: number
     totalResolved: number
   }
+  targets: any
 }
 
 // --- Animated Counter Hook ---
@@ -183,6 +185,9 @@ export default function InsightsPage() {
       {/* Dashboard Content */}
       {!loading && data && data.summary.analyzedEntries > 0 && (
         <div className="space-y-6">
+          {/* Targets Module */}
+          <TargetsWidget targets={data.targets} />
+          
           {/* Summary Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <AnimatedStatCard icon={<BookOpen className="w-5 h-5 text-violet-500" />} label="Entries" target={data.summary.totalEntries} />
