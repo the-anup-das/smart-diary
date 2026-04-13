@@ -2,7 +2,7 @@ import * as React from "react"
 import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
-export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClose?: () => void }) {
+export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { feedback: any, preferences?: any, onClose?: () => void }) {
   if (!feedback) return null;
 
   return (
@@ -21,7 +21,8 @@ export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClos
 
       {/* Top Level Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <GlassCard>
+        {!preferences?.hide_mood && (
+          <GlassCard>
             <div className="flex items-center space-x-3 mb-2">
               <Sparkles className="w-5 h-5 text-primary" />
               <h3 className="font-semibold text-gray-900 dark:text-gray-100">Emotional Resonance</h3>
@@ -42,8 +43,10 @@ export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClos
             </div>
             <ProgressBar value={feedback.moodScore * 10} moodScore={feedback.moodScore} />
         </GlassCard>
+        )}
 
-        <GlassCard>
+        {!preferences?.hide_grammar && (
+          <GlassCard>
             <div className="flex items-center space-x-3 mb-2">
               <ShieldAlert className="w-5 h-5 text-blue-500" />
               <h3 className="font-semibold text-gray-900 dark:text-gray-100">Linguistic Clarity</h3>
@@ -55,11 +58,12 @@ export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClos
               </div>
             </div>
             <ProgressBar value={feedback.grammarScore * 10} />
-        </GlassCard>
+          </GlassCard>
+        )}
       </div>
 
       {/* Grammar Corrections */}
-      {Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length > 0 && (
+      {!preferences?.hide_grammar && Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length > 0 && (
         <GlassCard>
           <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center"><CheckCircle2 className="w-4 h-4 mr-2 text-green-500" /> Grammar Polish</h3>
           <div className="space-y-3">
@@ -75,7 +79,7 @@ export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClos
       )}
 
       {/* Cognitive Reframes */}
-      {Array.isArray(feedback.cognitiveReframes) && feedback.cognitiveReframes.length > 0 && (
+      {!preferences?.hide_reframes && Array.isArray(feedback.cognitiveReframes) && feedback.cognitiveReframes.length > 0 && (
         <GlassCard>
           <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center"><BrainCircuit className="w-5 h-5 mr-2 text-primary" /> Cognitive Reframing</h3>
           <div className="space-y-4">
@@ -97,7 +101,7 @@ export function FeedbackDashboard({ feedback, onClose }: { feedback: any, onClos
       )}
 
       {/* Open Loops */}
-      {Array.isArray(feedback.openLoops) && feedback.openLoops.length > 0 && (
+      {!preferences?.hide_open_loops && Array.isArray(feedback.openLoops) && feedback.openLoops.length > 0 && (
         <GlassCard>
           <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100">Unresolved Open Loops</h3>
           <ul className="space-y-2">

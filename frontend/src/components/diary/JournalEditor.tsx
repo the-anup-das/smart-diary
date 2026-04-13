@@ -5,6 +5,8 @@ import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
 import { FeedbackDashboard } from "./FeedbackDashboard"
+import { EchoesWidget } from "./EchoesWidget"
+import { MorningIntentions } from "./MorningIntentions"
 import { CheckCircle2 } from "lucide-react"
 
 export function JournalEditor({ initialContent = "" }: { initialContent?: string }) {
@@ -14,7 +16,20 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
   const [feedbackData, setFeedbackData] = React.useState<any>(null)
   const [aiError, setAiError] = React.useState<string | null>(null)
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null)
+  const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
+  const [preferences, setPreferences] = React.useState<any>({})
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+
+  React.useEffect(() => {
+    fetch("/api/users/me")
+      .then(res => res.json())
+      .then(data => {
+        if (!data.detail && data.preferences) {
+          setPreferences(data.preferences)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -126,6 +141,14 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
     }
   }, [])
 
+  const handleSelectIntention = (prompt: string) => {
+    if (editor) {
+      editor.commands.focus('end');
+      editor.commands.insertContent(`<h2>${prompt}</h2><p></p>`);
+      setShowIntentions(false);
+    }
+  }
+
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
   return (
@@ -151,8 +174,12 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
         </div>
       </div>
       
+      <EchoesWidget />
+      
+      <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
+      
       <div className="flex-1 relative overflow-hidden group">
-        <div className="w-full h-full bg-transparent font-serif text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 py-4 custom-scrollbar overflow-y-auto">
+        <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 py-4 custom-scrollbar overflow-y-auto`}>
           <EditorContent editor={editor} />
         </div>
         {/* Subtle gradient overlay to fade text at bottom elegantly */}
@@ -199,7 +226,7 @@ export function JournalEditor({ initialContent = "" }: { initialContent?: string
         </div>
       )}
 
-      <FeedbackDashboard feedback={feedbackData} onClose={() => setFeedbackData(null)} />
+      <FeedbackDashboard feedback={feedbackData} preferences={preferences} onClose={() => setFeedbackData(null)} />
     </div>
   )
 }

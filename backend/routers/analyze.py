@@ -93,6 +93,12 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
     
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    preferences = user.preferences or {} if user else {}
+    
+    if preferences.get("pause_ai", False):
+        return {"success": True, "paused": True, "feedback": None}
+    
     entry = db.query(models.JournalEntry).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.date >= today_start,
@@ -122,12 +128,17 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     vocab_stats = _compute_vocab_stats(user_id, raw_text, entry.id, db)
     
     try:
+        system_prompt = "You are an empathetic, clinical AI psychologist and highly advanced grammar engine observing a diary. Parse their entry directly into the strict JSON parameters requested. Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0."
+        custom_persona = preferences.get("custom_persona_prompt", "")
+        if custom_persona:
+            system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
+            
         response = client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an empathetic, clinical AI psychologist and highly advanced grammar engine observing a diary. Parse their entry directly into the strict JSON parameters requested. Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
@@ -190,3 +201,60 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
         print("Analysis Error:", str(e), flush=True)
         raise HTTPException(status_code=500, detail=f"OpenAI Exception: {str(e)}")
 
+class DailyIntentionsSchema(BaseModel):
+    intentions: list[str] = Field(description="List of 3 journaling prompts.")
+
+@router.get("/api/analyze/intentions")
+def get_morning_intentions(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    prefs = user.preferences or {}
+    
+    # 1. Check Cache
+    cached_intentions = prefs.get("daily_intentions", {})
+    if cached_intentions.get("date") == date_str and "prompts" in cached_intentions:
+        return {"intentions": cached_intentions["prompts"], "cached": True}
+        
+    # 2. Fetch Open Loops
+    open_loops_objects = (
+        db.query(models.OpenLoop)
+        .filter(models.OpenLoop.user_id == user_id, models.OpenLoop.status.in_(["open", "pinned"]))
+        .order_by(models.OpenLoop.status.desc(), models.OpenLoop.detected_at.asc())
+        .limit(3)
+        .all()
+    )
+    loop_texts = [l.text for l in open_loops_objects]
+    
+    # 3. Prompt OpenAI
+    system_instruction = "You are a serene morning journaling assistant. Generate exactly 3 insightful, reflective journaling prompts for the user to start their day."
+    if loop_texts:
+        system_instruction += f" Base the prompts on resolving or thinking through these current anxieties/tasks instead of generic advice: {', '.join(loop_texts)}."
+    
+    try:
+        response = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system_instruction}],
+            response_format=DailyIntentionsSchema,
+            temperature=0.7
+        )
+        prompts = response.choices[0].message.parsed.intentions
+        
+        # 4. Save to Cache
+        cached_intentions = {"date": date_str, "prompts": prompts}
+        new_prefs = dict(prefs)
+        new_prefs["daily_intentions"] = cached_intentions
+        user.preferences = new_prefs
+        db.commit()
+        
+        return {"intentions": prompts, "cached": False}
+    except Exception as e:
+        print("Intentions generation failed:", e)
+        fallback = [
+            "What is one small thing I can do today to make progress?",
+            "What am I worrying about that is outside of my control?",
+            "How can I be kind to myself today?"
+        ]
+        return {"intentions": fallback, "cached": False, "error": str(e)}

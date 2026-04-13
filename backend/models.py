@@ -13,6 +13,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password = Column(String, nullable=False)
     name = Column(String)
+    preferences = Column(JSON, default={})
     
     entries = relationship("JournalEntry", back_populates="user", cascade="all, delete-orphan")
 
