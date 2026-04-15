@@ -8,7 +8,7 @@
       "note": "AI-powered personal diary. Requires an OpenAI API Key.",
       "categories": ["Utility", "AI"],
       "platform": "linux",
-      "logo": "https://raw.githubusercontent.com/the-anup-das/smart-diary/main/frontend/public/icons/icon-192x192.png",
+      "logo": "https://raw.githubusercontent.com/the-anup-das/smart-diary/main/frontend/public/icon-192x192.png",
       "repository": {
         "url": "https://github.com/the-anup-das/smart-diary",
         "stackfile": "docker-compose.nas.yml"

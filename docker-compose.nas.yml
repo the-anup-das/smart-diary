@@ -18,8 +18,7 @@ services:
       retries: 5
 
   backend:
-    # REPLACEME: Change 'theanupdas' to your Docker Hub username
-    image: theanupdas/smart-diary-backend:latest
+    image: ghcr.io/the-anup-das/smart-diary-backend:latest
     container_name: diary-backend
     restart: unless-stopped
     environment:
@@ -34,8 +33,7 @@ services:
       - "8000:8000"
 
   frontend:
-    # REPLACEME: Change 'theanupdas' to your Docker Hub username
-    image: theanupdas/smart-diary-frontend:latest
+    image: ghcr.io/the-anup-das/smart-diary-frontend:latest
     container_name: diary-frontend
     restart: unless-stopped
     environment:
