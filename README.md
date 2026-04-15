@@ -94,6 +94,26 @@ Create an account, write your first entry, and the AI will analyze it automatica
 
 ---
 
+## 🏠 NAS / Home Server Deployment
+
+For users with a NAS (Synology, QNAP, TrueNAS) or any home server with Docker, you can deploy Smart Diary without downloading the source code.
+
+### 1. Simple Deployment (Docker Compose)
+Download the optimized [docker-compose.nas.yml](./docker-compose.nas.yml) and run:
+
+```bash
+docker-compose -f docker-compose.nas.yml up -d
+```
+
+### 2. Portainer (One-Click)
+Use our [Portainer Template](./portainer-template.json) to deploy directly from your dashboard. Most NAS users prefer this for its easy web interface.
+
+### 3. Requirements
+- **Hardware**: Supports both **x86_64** (Intel/AMD) and **ARM64** (Raspberry Pi / New Synology models).
+- **Environment**: You must set `OPENAI_API_KEY` and `JWT_SECRET` in your container's environment variables.
+
+---
+
 ## 📁 Project Structure
 
 ```
