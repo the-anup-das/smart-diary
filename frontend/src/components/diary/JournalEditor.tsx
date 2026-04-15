@@ -7,10 +7,12 @@ import Image from '@tiptap/extension-image'
 import { FeedbackDashboard } from "./FeedbackDashboard"
 import { EchoesWidget } from "./EchoesWidget"
 import { MorningIntentions } from "./MorningIntentions"
-import { CheckCircle2, Trash } from "lucide-react"
+import { CheckCircle2, Trash, WifiOff } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
+import { useNetworkStatus } from "@/lib/useNetworkStatus"
 
 export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
+  const isOnline = useNetworkStatus()
   const [isSaving, setIsSaving] = React.useState(false)
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [processStage, setProcessStage] = React.useState<string>("")
@@ -33,6 +35,28 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       })
       .catch(() => {})
   }, [])
+
+  React.useEffect(() => {
+    if (isOnline) {
+      const offlineDraft = localStorage.getItem('offline_draft');
+      if (offlineDraft) {
+        setIsSaving(true);
+        fetch('/api/entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: offlineDraft })
+        })
+        .then(res => res.json())
+        .then(resData => {
+           if (resData.id) setCurrentEntryId(resData.id);
+           localStorage.removeItem('offline_draft');
+           setLastSaved(new Date());
+        })
+        .catch(console.error)
+        .finally(() => setIsSaving(false));
+      }
+    }
+  }, [isOnline]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -63,6 +87,14 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       timeoutRef.current = setTimeout(async () => {
         try {
           const htmlContent = editor.getHTML()
+          
+          if (!navigator.onLine) {
+            localStorage.setItem('offline_draft', htmlContent);
+            setLastSaved(new Date());
+            setIsSaving(false);
+            return;
+          }
+
           const res = await fetch('/api/entries', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -86,6 +118,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
 
   async function handleSaveAndReflect() {
     if (!editor) return;
+    
+    if (!isOnline) {
+      setAiError("You are currently offline. AI reflection requires a network connection. Your draft is securely saved locally.");
+      return;
+    }
+    
     setIsProcessing(true);
     setFeedbackData(null);
     setAiError(null);
@@ -143,6 +181,10 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
 
   async function handleDelete() {
     if (!currentEntryId) return;
+    if (!isOnline) {
+      setAiError("Deletion requires an active network connection to sync with the cloud.");
+      return;
+    }
     setShowDeleteModal(true);
   }
 
@@ -207,7 +249,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
                 <span>Saving...</span>
               </>
             ) : lastSaved ? (
-              <span>Saved {lastSaved.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+              !isOnline ? (
+                <span className="flex items-center text-orange-500 gap-1.5 font-semibold"><WifiOff className="w-3.5 h-3.5" /> Saved locally</span>
+              ) : (
+                <span>Saved {lastSaved.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+              )
             ) : (
               <span>Draft</span>
             )}
