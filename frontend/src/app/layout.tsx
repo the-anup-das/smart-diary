@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+
 import { Inter, Merriweather } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { MoodProvider } from "@/components/MoodProvider";
@@ -15,9 +15,34 @@ const merriweather = Merriweather({
   subsets: ["latin"],
 });
 
+import type { Metadata, Viewport } from "next";
+
+export const viewport: Viewport = {
+  themeColor: "#8b5cf6",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export const metadata: Metadata = {
   title: "AI Diary Platform",
   description: "A digital diary with AI insights and cognitive tracking",
+  appleWebApp: {
+    capable: true,
+    title: "Smart Diary",
+    statusBarStyle: "default",
+    startupImage: [
+      '/icon-512x512.png',
+    ],
+  },
+  icons: {
+    icon: '/icon-192x192.png',
+    apple: '/icon-192x192.png',
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export default function RootLayout({

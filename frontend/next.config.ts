@@ -1,4 +1,14 @@
 import type { NextConfig } from "next";
+import withPWAInit from "@ducanh2912/next-pwa";
+
+const withPWA = withPWAInit({
+  dest: "public",
+  disable: 
+    process.env.PWA_DISABLED === "true" || 
+    (process.env.NODE_ENV === "development" && process.env.LOCAL_FORCE_PWA_ENABLE !== "true"),
+  register: true,
+  cacheOnFrontEndNav: true,
+});
 
 const nextConfig: NextConfig = {
   async rewrites() {
@@ -12,4 +22,4 @@ const nextConfig: NextConfig = {
   }
 };
 
-export default nextConfig;
+export default withPWA(nextConfig);
