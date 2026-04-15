@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Merriweather } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { MoodProvider } from "@/components/MoodProvider";
 import "./globals.css";
 
 const inter = Inter({
@@ -35,7 +36,9 @@ export default function RootLayout({
         className="min-h-full flex flex-col bg-background text-foreground transition-colors duration-300"
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          {children}
+          <MoodProvider>
+            {children}
+          </MoodProvider>
         </ThemeProvider>
       </body>
     </html>

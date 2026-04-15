@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -13,6 +13,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password = Column(String, nullable=False)
     name = Column(String)
+    preferences = Column(JSON, default={})
     
     entries = relationship("JournalEntry", back_populates="user", cascade="all, delete-orphan")
 
@@ -24,6 +25,8 @@ class JournalEntry(Base):
     date = Column(DateTime, default=datetime.utcnow, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(DateTime, nullable=True)
     
     user = relationship("User", back_populates="entries")
     feedback = relationship("FeedbackReport", back_populates="entry", uselist=False, cascade="all, delete-orphan")

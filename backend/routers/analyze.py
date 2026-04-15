@@ -93,10 +93,17 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
     
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    preferences = user.preferences or {} if user else {}
+    
+    if preferences.get("pause_ai", False):
+        return {"success": True, "paused": True, "feedback": None}
+    
     entry = db.query(models.JournalEntry).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end
+        models.JournalEntry.date <= today_end,
+        models.JournalEntry.is_deleted == False
     ).first()
     
     raw_text = re.sub(r'<[^>]*>?', '', entry.content) if entry else ""
@@ -122,12 +129,17 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     vocab_stats = _compute_vocab_stats(user_id, raw_text, entry.id, db)
     
     try:
+        system_prompt = "You are an empathetic, clinical AI psychologist and highly advanced grammar engine observing a diary. Parse their entry directly into the strict JSON parameters requested. Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0."
+        custom_persona = preferences.get("custom_persona_prompt", "")
+        if custom_persona:
+            system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
+            
         response = client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an empathetic, clinical AI psychologist and highly advanced grammar engine observing a diary. Parse their entry directly into the strict JSON parameters requested. Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0."
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
@@ -190,3 +202,102 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
         print("Analysis Error:", str(e), flush=True)
         raise HTTPException(status_code=500, detail=f"OpenAI Exception: {str(e)}")
 
+class DailyIntentionsSchema(BaseModel):
+    intentions: list[str] = Field(description="List of 3 journaling prompts.")
+
+TIME_OF_DAY_CONFIG = {
+    "morning": {
+        "persona": "You are a serene morning journaling assistant. Generate exactly 3 insightful, energising journaling prompts to help the user set clear intentions and start their day with purpose.",
+        "cache_key": "morning",
+    },
+    "afternoon": {
+        "persona": "You are a midday check-in journaling coach. Generate exactly 3 reflective journaling prompts to help the user assess their progress, refocus energy, and stay grounded through the rest of the day.",
+        "cache_key": "afternoon",
+    },
+    "evening": {
+        "persona": "You are a calming evening journaling guide. Generate exactly 3 warm, reflective journaling prompts to help the user wind down, appreciate the day's moments, and process their emotions before nightfall.",
+        "cache_key": "evening",
+    },
+    "night": {
+        "persona": "You are a gentle night journaling companion. Generate exactly 3 peaceful, introspective journaling prompts to help the user release the day's weight, find gratitude, and ease into restful sleep.",
+        "cache_key": "night",
+    },
+}
+
+@router.get("/api/analyze/intentions")
+def get_intentions(
+    time_of_day: str = "morning",
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Normalise and fallback
+    tod = time_of_day.lower() if time_of_day.lower() in TIME_OF_DAY_CONFIG else "morning"
+    config = TIME_OF_DAY_CONFIG[tod]
+
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    prefs = user.preferences or {}
+
+    # Cache key is per-slot-per-day e.g. "daily_intentions_evening"
+    cache_field = f"daily_intentions_{config['cache_key']}"
+    cached = prefs.get(cache_field, {})
+    if cached.get("date") == date_str and "prompts" in cached:
+        return {"intentions": cached["prompts"], "cached": True, "time_of_day": tod}
+
+    # Fetch Open Loops for personalisation
+    open_loops_objects = (
+        db.query(models.OpenLoop)
+        .filter(models.OpenLoop.user_id == user_id, models.OpenLoop.status.in_(["open", "pinned"]))
+        .order_by(models.OpenLoop.status.desc(), models.OpenLoop.detected_at.asc())
+        .limit(3)
+        .all()
+    )
+    loop_texts = [l.text for l in open_loops_objects]
+
+    system_instruction = config["persona"]
+    if loop_texts:
+        system_instruction += f" Where relevant, weave in these unresolved thoughts/tasks the user has been carrying: {', '.join(loop_texts)}."
+
+    try:
+        response = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system_instruction}],
+            response_format=DailyIntentionsSchema,
+            temperature=0.7
+        )
+        prompts = response.choices[0].message.parsed.intentions
+
+        new_prefs = dict(prefs)
+        new_prefs[cache_field] = {"date": date_str, "prompts": prompts}
+        user.preferences = new_prefs
+        db.commit()
+
+        return {"intentions": prompts, "cached": False, "time_of_day": tod}
+    except Exception as e:
+        print("Intentions generation failed:", e)
+        fallbacks = {
+            "morning": [
+                "What intention do I want to set for today?",
+                "What am I looking forward to most this morning?",
+                "What would make today feel meaningful?",
+            ],
+            "afternoon": [
+                "How has my energy shifted since this morning?",
+                "What's one thing I can let go of to refocus?",
+                "What small win can I celebrate from the first half of today?",
+            ],
+            "evening": [
+                "What moments from today am I grateful for?",
+                "How did I show up for myself or others today?",
+                "What do I want to feel before I sleep tonight?",
+            ],
+            "night": [
+                "What thought do I want to release before I sleep?",
+                "What is one thing that went well today, however small?",
+                "What gentle intention do I want to carry into tomorrow?",
+            ],
+        }
+        return {"intentions": fallbacks[tod], "cached": False, "time_of_day": tod, "error": str(e)}

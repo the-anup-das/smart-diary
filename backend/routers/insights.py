@@ -51,12 +51,25 @@ def get_insights(
 ):
     start_date = _get_date_range(range)
     
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    prefs = user.preferences or {} if user else {}
+    targets = prefs.get("targets", {
+        "daily_words": 200,
+        "target_mood": 7,
+        "weekly_vocab": 10,
+        "consistency_streak": 5,
+        "weekly_loops": 3,
+        "weekly_reframes": 3,
+        "sentiment_diversity": 3
+    })
+    
     # Fetch all entries with feedback in the date range
     entries = (
         db.query(models.JournalEntry)
         .filter(
             models.JournalEntry.user_id == user_id,
-            models.JournalEntry.date >= start_date
+            models.JournalEntry.date >= start_date,
+            models.JournalEntry.is_deleted == False
         )
         .order_by(models.JournalEntry.date.asc())
         .all()
@@ -69,6 +82,7 @@ def get_insights(
     total_mood = 0
     total_grammar = 0
     analyzed_count = 0
+    total_reframes = 0
     all_new_words = []
     
     for entry in entries:
@@ -79,6 +93,9 @@ def get_insights(
         analyzed_count += 1
         total_mood += (fb.mood_score or 0)
         total_grammar += (fb.grammar_score or 0)
+        
+        if fb.cognitive_reframes:
+            total_reframes += len(fb.cognitive_reframes)
         
         # Sentiment distribution
         sent = fb.sentiment or "Unknown"
@@ -110,7 +127,8 @@ def get_insights(
     # Compute streak (consecutive days with entries, counting backwards from today)
     streak = 0
     all_user_entries = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id
+        models.JournalEntry.user_id == user_id,
+        models.JournalEntry.is_deleted == False
     ).all()
     if all_user_entries:
         check_date = datetime.utcnow().date()
@@ -227,12 +245,42 @@ def get_insights(
             "totalOpen": total_open,
             "totalResolved": total_resolved,
         },
+        "targets": {
+            "daily_words": { "current": sum(e["wordCount"] for e in timeline if e["date"] == datetime.utcnow().strftime("%Y-%m-%d")), "target": targets["daily_words"] },
+            "target_mood": { "current": round(total_mood / analyzed_count, 1) if analyzed_count else 0, "target": targets["target_mood"] },
+            "weekly_vocab": { "current": len(set(all_new_words)), "target": targets["weekly_vocab"] },
+            "consistency_streak": { "current": streak, "target": targets["consistency_streak"] },
+            "weekly_loops": { "current": total_resolved, "target": targets["weekly_loops"] },
+            "weekly_reframes": { "current": total_reframes, "target": targets["weekly_reframes"] },
+            "sentiment_diversity": { "current": len([s for s in sentiments if s != "—" and s != "Neutral"]), "target": targets["sentiment_diversity"] },
+        }
     }
 
 
 # --- Open Loop Actions ---
 class LoopAction(BaseModel):
     action: str  # "resolve", "dismiss", "pin", "reopen"
+
+@router.get("/api/open-loops")
+def get_open_loops(
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db)
+):
+    open_loops = (
+        db.query(models.OpenLoop)
+        .filter(
+            models.OpenLoop.user_id == user_id,
+            models.OpenLoop.status.in_(["open", "pinned"])
+        )
+        .order_by(
+            models.OpenLoop.status.desc(),
+            models.OpenLoop.detected_at.asc()
+        )
+        .limit(5)
+        .all()
+    )
+    return {"items": [{"id": loop.id, "text": loop.text, "status": loop.status} for loop in open_loops]}
+
 
 @router.patch("/api/open-loops/{loop_id}")
 def update_open_loop(
