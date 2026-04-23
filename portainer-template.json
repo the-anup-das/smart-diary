@@ -1,0 +1,42 @@
+{
+  "version": "2",
+  "templates": [
+    {
+      "type": 1,
+      "title": "Smart Diary",
+      "description": "An AI-powered daily journal with Open Loops and Word Targets.",
+      "note": "AI-powered personal diary. Requires an OpenAI API Key.",
+      "categories": ["Utility", "AI"],
+      "platform": "linux",
+      "logo": "https://raw.githubusercontent.com/the-anup-das/smart-diary/main/frontend/public/icon-192x192.png",
+      "repository": {
+        "url": "https://github.com/the-anup-das/smart-diary",
+        "stackfile": "docker-compose.nas.yml"
+      },
+      "env": [
+        {
+          "name": "OPENAI_API_KEY",
+          "label": "OpenAI API Key",
+          "description": "Your OpenAI API Key for AI suggestions."
+        },
+        {
+          "name": "OPENAI_BASE_URL",
+          "label": "OpenAI Base URL",
+          "description": "Optional API base URL override (e.g. for Ollama or LocalAI).",
+          "default": "https://api.openai.com/v1"
+        },
+        {
+          "name": "JWT_SECRET",
+          "label": "JWT Secret",
+          "description": "Unique random string for security.",
+          "default": "change-me-to-something-random"
+        },
+        {
+          "name": "DB_PASSWORD",
+          "label": "Database Password",
+          "default": "diary_password_secure"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: diary-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-diary_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-diary_password}
+      POSTGRES_DB: ${DB_NAME:-diary_db}
+    volumes:
+      - diary_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: ghcr.io/the-anup-das/smart-diary-backend:latest
+    container_name: diary-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-diary_user}:${DB_PASSWORD:-diary_password}@db:5432/${DB_NAME:-diary_db}
+      - JWT_SECRET=${JWT_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    image: ghcr.io/the-anup-das/smart-diary-frontend:latest
+    container_name: diary-frontend
+    restart: unless-stopped
+    environment:
+      - INTERNAL_BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - JWT_SECRET=${JWT_SECRET}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  diary_db_data:

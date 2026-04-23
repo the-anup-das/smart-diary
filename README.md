@@ -94,6 +94,32 @@ Create an account, write your first entry, and the AI will analyze it automatica
 
 ---
 
+## 🏠 NAS / Home Server Deployment
+
+Smart Diary is optimized for self-hosting on NAS (Synology, QNAP, TrueNAS) or any home server. We use **GitHub Container Registry (GHCR)** to ensure zero rate-limits for our users.
+
+### 📦 Docker Images
+| Component | Image |
+|-----------|-------|
+| **Backend** | `ghcr.io/the-anup-das/smart-diary-backend:latest` |
+| **Frontend** | `ghcr.io/the-anup-das/smart-diary-frontend:latest` |
+
+### 1. Simple Deployment (Docker Compose)
+Download the optimized [docker-compose.nas.yml](./docker-compose.nas.yml) and run:
+
+```bash
+docker-compose -f docker-compose.nas.yml up -d
+```
+
+### 2. Portainer (One-Click)
+Use our [Portainer Template](./portainer-template.json) to deploy directly from your dashboard. This is the recommended way for Synology/QNAP users.
+
+### 3. Hardware Support
+- **Architecture**: Supports **x86_64** (Intel/AMD) and **ARM64** (Raspberry Pi / New NAS models).
+- **Environment**: Ensure `OPENAI_API_KEY` and `JWT_SECRET` are set in your environment.
+
+---
+
 ## 📁 Project Structure
 
 ```
