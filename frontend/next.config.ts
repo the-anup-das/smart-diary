@@ -12,11 +12,6 @@ const withPWA = withPWAInit({
 
 const nextConfig: NextConfig = {
   output: 'standalone',
-  // Next.js 16 uses Turbopack by default. Since we use a Webpack-based PWA plugin,
-  // we acknowledge the configuration here to allow the build to proceed.
-  experimental: {
-    turbopack: {},
-  },
   async rewrites() {
     return [
       {
