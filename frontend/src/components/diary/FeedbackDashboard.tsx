@@ -1,9 +1,32 @@
 import * as React from "react"
-import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash, GitMerge, ArrowRight } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
 export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { feedback: any, preferences?: any, onClose?: () => void }) {
+  const router = useRouter()
+  const [creatingDecision, setCreatingDecision] = React.useState(false)
+
   if (!feedback) return null;
+
+  const handleStartDecision = async () => {
+    if (!feedback.detectedDecision) return
+    setCreatingDecision(true)
+    try {
+      const res = await fetch('/api/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: feedback.detectedDecision })
+      })
+      if (res.ok) {
+        const newDecision = await res.json()
+        router.push(`/decisions/${newDecision.id}`)
+      }
+    } catch (e) {
+      console.error(e)
+      setCreatingDecision(false)
+    }
+  }
 
   return (
     <div className="mt-8 space-y-6 fade-in max-w-4xl mx-auto w-full pb-20 px-2 lg:px-6 relative">
@@ -16,6 +39,38 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
             <span>Close Analysis</span>
             <span className="text-xl leading-none">&times;</span>
           </button>
+        </div>
+      )}
+
+      {/* Detected Decision CTA */}
+      {!preferences?.hide_decisions && feedback.detectedDecision && (
+        <div className="p-6 rounded-2xl bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 backdrop-blur-xl shadow-lg relative overflow-hidden group">
+          <div className="absolute -right-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all" />
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center">
+                <GitMerge className="w-5 h-5 mr-2 text-indigo-500" />
+                Looming Decision Detected
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 max-w-md">
+                "{feedback.detectedDecision}"
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Our AI noticed you're struggling with this. Let's break it down logically.
+              </p>
+            </div>
+            <button 
+              onClick={handleStartDecision}
+              disabled={creatingDecision}
+              className="flex items-center space-x-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0"
+            >
+              {creatingDecision ? (
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
+              ) : null}
+              <span>Resolve This Decision</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 

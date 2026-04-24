@@ -9,6 +9,8 @@ import openai
 import os
 import re
 import hashlib
+import threading
+from memory_service import ingest_diary_entry
 
 router = APIRouter()
 
@@ -42,6 +44,8 @@ class FeedbackReportSchema(BaseModel):
     selfFocusFeedback: str = Field(description="Brief, gentle psychological insight about their focus balance.")
     repetitiveWords: list[str] = Field(description="List of words or short phrases overused in this entry (3-5 items).")
     repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
+    detectedDecision: str | None = Field(default=None, description="If the user is struggling with a specific decision (e.g., 'Should I quit my job?'), summarize the topic here. Otherwise null.")
+
 
 def _tokenize(text: str) -> set[str]:
     """Extract lowercase alphabetic words from text."""
@@ -92,8 +96,10 @@ def _build_response(feedback, cached: bool = False):
             "selfFocusScore": feedback.self_focus_score,
             "selfFocusFeedback": feedback.self_focus_feedback,
             "repetitiveWording": feedback.repetitive_wording,
+            "detectedDecision": feedback.detected_decision,
         }
     }
+
 
 @router.post("/api/analyze")
 def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
@@ -167,6 +173,7 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
         )
         
         parsed = response.choices[0].message.parsed
+        print(f"Parsed analysis successfully: {parsed.sentiment}", flush=True)
         
         feedback_data = {
             "mood_score": parsed.moodScore,
@@ -185,8 +192,10 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "repetitive_wording": {
                 "words": parsed.repetitiveWords,
                 "feedback": parsed.repetitiveWordingFeedback
-            }
+            },
+            "detected_decision": parsed.detectedDecision
         }
+
         
         if existing_feedback:
             for key, value in feedback_data.items():
@@ -220,9 +229,19 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
                 ))
         db.commit()
         
+        # Fire-and-forget: ingest raw entry text into mem0 for future decision context
+        raw_text = re.sub(r'<[^>]*>?', '', entry.content or "")
+        entry_date_str = str(entry.created_at.date()) if entry.created_at else "unknown"
+        threading.Thread(
+            target=ingest_diary_entry,
+            args=(user_id, raw_text, entry_date_str),
+            daemon=True
+        ).start()
+        
         return _build_response(feedback)
     except Exception as e:
-        print("Analysis Error:", str(e), flush=True)
+        import traceback
+        print("Analysis Error Traceback:", traceback.format_exc(), flush=True)
         raise HTTPException(status_code=500, detail=f"OpenAI Exception: {str(e)}")
 
 class DailyIntentionsSchema(BaseModel):

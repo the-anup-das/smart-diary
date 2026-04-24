@@ -45,7 +45,7 @@ def _get_previous_range(range_str: str):
 
 @router.get("/api/insights")
 def get_insights(
-    range: str = Query(default="week", regex="^(day|week|month|year|all)$"),
+    range: str = Query(default="week", pattern="^(day|week|month|year|all)$"),
     user_id: str = Depends(verify_session),
     db: Session = Depends(get_db)
 ):
