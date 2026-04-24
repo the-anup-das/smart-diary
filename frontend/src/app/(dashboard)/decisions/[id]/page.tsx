@@ -211,110 +211,48 @@ export default function DecisionCanvasPage() {
                 </p>
               </div>
 
-              {/* Weighted Matrix */}
-              {agentResult.framework === "weighted_matrix" && agentResult.data?.matrix && (
+              {/* Dynamic Swarm Output */}
+              {agentResult.framework === "dynamic_swarm" && agentResult.data?.paths && (
                 <div className="space-y-4">
-                  {agentResult.data.matrix.map((row: any, i: number) => (
+                  {agentResult.data.paths.map((path: any, i: number) => (
                     <PathCard
                       key={i}
-                      name={row.option}
-                      isSelected={selectedPath === row.option}
-                      onChoose={() => handleChoosePath(row.option)}
+                      name={path.path_name}
+                      isSelected={selectedPath === path.path_name}
+                      onChoose={() => handleChoosePath(path.path_name)}
                       disabled={selectingPath}
                     >
-                      <div className="flex items-center justify-between mt-3 mb-4">
-                        <span className="text-sm font-medium text-gray-500">Total Weighted Score</span>
-                        <span className="text-3xl font-black text-indigo-600 dark:text-indigo-400">{row.total_score}</span>
-                      </div>
-                      {row.scores && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-                          {row.scores.map((s: any, j: number) => (
-                            <div key={j} className="p-3.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
-                              <div className="flex justify-between items-center mb-2">
-                                <span className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">{s.domain?.replace(/_/g, ' ')}</span>
-                                <div className="flex items-baseline gap-1">
-                                  <span className="text-sm font-black text-indigo-500">{s.raw_score}</span>
-                                  <span className="text-[10px] text-gray-400 font-medium">/5</span>
-                                </div>
-                              </div>
-                              <div className="w-full h-1.5 bg-black/10 dark:bg-white/10 rounded-full mb-2.5 overflow-hidden">
-                                <div className="h-full bg-indigo-500 rounded-full transition-all duration-1000" style={{ width: `${(s.raw_score / 5) * 100}%` }} />
-                              </div>
-                              <p className="text-xs text-gray-600 dark:text-gray-400 leading-snug">{s.justification}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </PathCard>
-                  ))}
-                </div>
-              )}
-
-              {/* 10/10/10 Rule */}
-              {agentResult.framework === "10_10_10_rule" && agentResult.data?.options && (
-                <div className="space-y-4">
-                  {agentResult.data.options.map((opt: any, i: number) => (
-                    <PathCard
-                      key={i}
-                      name={opt.name}
-                      isSelected={selectedPath === opt.name}
-                      onChoose={() => handleChoosePath(opt.name)}
-                      disabled={selectingPath}
-                    >
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
-                        {["10_minutes", "10_months", "10_years"].map((horizon, hi) => {
-                          const h = opt.horizons?.[horizon]
-                          if (!h) return null
-                          const labels = ["10 Minutes", "10 Months", "10 Years"]
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        {path.factors.map((f: any, j: number) => {
+                          const hasPositive = f.positive_impact && f.positive_impact.toLowerCase() !== 'none' && f.positive_impact.toLowerCase() !== 'n/a';
+                          const hasNegative = f.negative_impact && f.negative_impact.toLowerCase() !== 'none' && f.negative_impact.toLowerCase() !== 'n/a';
+                          
                           return (
-                            <div key={hi} className="p-3 rounded-xl bg-black/5 dark:bg-white/5">
-                              <div className="text-xs font-semibold text-gray-500 flex items-center mb-2">
-                                <Clock className="w-3 h-3 mr-1" />{labels[hi]}
-                              </div>
-                              <p className="text-xs font-medium text-gray-800 dark:text-gray-200 mb-2">{h.headline}</p>
-                              {h.domains && (
-                                <div className="space-y-2 mt-3">
-                                  {Object.entries(h.domains).map(([domain, text]) => (
-                                    <div key={domain} className="p-2 rounded-lg bg-white/50 dark:bg-black/20 border border-black/5 dark:border-white/5">
-                                      <span className="block text-[10px] font-bold uppercase tracking-wider text-indigo-500/80 mb-1">{domain.replace(/_/g, ' ')}</span>
-                                      <span className="text-xs text-gray-700 dark:text-gray-300 leading-snug block">{text as string}</span>
-                                    </div>
-                                  ))}
+                            <div key={j} className="flex flex-col space-y-2 p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">{f.factor_name}</h4>
+                              
+                              {hasPositive && (
+                                <div className="flex items-start bg-emerald-500/10 p-3 rounded-lg border border-emerald-500/20">
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-bold mr-2 text-lg leading-none shrink-0">+</span>
+                                  <p className="text-xs text-emerald-800 dark:text-emerald-200 leading-snug">{f.positive_impact}</p>
+                                </div>
+                              )}
+
+                              {hasNegative && (
+                                <div className="flex items-start bg-rose-500/10 p-3 rounded-lg border border-rose-500/20">
+                                  <span className="text-rose-600 dark:text-rose-400 font-bold mr-2 text-lg leading-none shrink-0">-</span>
+                                  <p className="text-xs text-rose-800 dark:text-rose-200 leading-snug">{f.negative_impact}</p>
                                 </div>
                               )}
                             </div>
                           )
                         })}
                       </div>
-                      {opt.emotional_truth && (
-                        <p className="mt-3 text-xs text-amber-700 dark:text-amber-300 italic border-l-2 border-amber-400 pl-3">{opt.emotional_truth}</p>
-                      )}
                     </PathCard>
                   ))}
-                </div>
-              )}
-
-              {/* Second Order Thinking */}
-              {agentResult.framework === "second_order_thinking" && agentResult.data?.options && (
-                <div className="space-y-4">
-                  {agentResult.data.options.map((opt: any, i: number) => (
-                    <PathCard
-                      key={i}
-                      name={opt.name}
-                      isSelected={selectedPath === opt.name}
-                      onChoose={() => handleChoosePath(opt.name)}
-                      disabled={selectingPath}
-                    >
-                      <div className="mt-4 space-y-3 relative">
-                        <div className="absolute left-3.5 top-3 bottom-3 w-0.5 bg-black/10 dark:bg-white/10" />
-                        <ConsequenceNode step="1" title="First Order Effect" data={opt.first_order} />
-                        <ConsequenceNode step="2" title="Second Order Effect" data={opt.second_order} color="text-amber-500" bgColor="bg-amber-500/10" borderColor="border-amber-500/20" />
-                        <ConsequenceNode step="3" title="Third Order Effect" data={opt.third_order} color="text-red-500" bgColor="bg-red-500/10" borderColor="border-red-500/20" />
-                      </div>
-                    </PathCard>
-                  ))}
-                  {agentResult.data.blindspots && (
-                    <div className="p-5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-900 dark:text-red-200 text-sm">
+                  
+                  {agentResult.data.blindspots && agentResult.data.blindspots.length > 0 && (
+                    <div className="p-5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 text-sm">
                       <span className="font-bold flex items-center mb-2"><AlertCircle className="w-4 h-4 mr-2" /> Blindspots Detected</span>
                       <ul className="list-disc pl-5 space-y-1">
                         {agentResult.data.blindspots.map((b: string, i: number) => <li key={i}>{b}</li>)}
@@ -323,8 +261,6 @@ export default function DecisionCanvasPage() {
                   )}
                 </div>
               )}
-
-              {/* Life Domain Analysis */}
 
               {/* Agent Recommendation */}
               {agentResult.data?.recommendation && (

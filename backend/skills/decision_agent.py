@@ -1,138 +1,214 @@
-import os
-import yaml
-import re
 import json
-from pathlib import Path
-from typing import Dict, Any, List
+import operator
+from typing import Dict, Any, List, Annotated
+from typing_extensions import TypedDict
+from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.types import Send
 
-# 1. Build the Skill Catalog by reading SKILL.md files from disk
-SKILLS_DIR = Path(__file__).parent
-SKILL_CATALOG = {}
+# --- 1. Define Pydantic Models for Structured Output ---
 
-# Parse all SKILL.md files in subdirectories
-for skill_dir in SKILLS_DIR.iterdir():
-    if skill_dir.is_dir():
-        skill_file = skill_dir / "SKILL.md"
-        if skill_file.exists():
-            content = skill_file.read_text(encoding="utf-8")
-            # Parse YAML frontmatter
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    metadata = yaml.safe_load(parts[1])
-                    body = parts[2].strip()
-                    skill_name = metadata.get("name", skill_dir.name)
-                    SKILL_CATALOG[skill_name] = {
-                        "description": metadata.get("description", ""),
-                        "content": body
-                    }
+class FactorModel(BaseModel):
+    name: str = Field(description="The name of the factor, e.g. 'Financial Risk', 'Mental Health', 'Family Strain'")
+    description: str = Field(description="Why this factor matters for this decision")
 
-# 2. Define the load_skill tool as per the Agent Skills specification
-@tool
-def load_skill(skill_name: str) -> str:
+class OrchestratorOutput(BaseModel):
+    paths: List[str] = Field(description="List of 2 to 4 distinct paths. If only one is implied, add 'Status Quo'.")
+    factors: List[FactorModel] = Field(description="List of 3 to 5 dynamic factors to evaluate against.")
+
+class FactorEvaluationModel(BaseModel):
+    factor_name: str
+    positive_impact: str = Field(description="Specific positive consequences or pros. Use 'None' if none.")
+    negative_impact: str = Field(description="Specific negative consequences or cons. Use 'None' if none.")
+
+class PathEvaluationModel(BaseModel):
+    factors: List[FactorEvaluationModel]
+
+class SynthesisOutputModel(BaseModel):
+    summary: str = Field(description="A compassionate 2-sentence summary of the entire decision landscape.")
+    blindspots: List[str] = Field(description="2-3 things the user might be romanticizing or ignoring.")
+    recommendation: str = Field(description="A decisive recommendation based on the evaluation.")
+
+
+# --- 2. Define LangGraph State ---
+
+class PathEvaluationResult(TypedDict):
+    path_name: str
+    factors: List[Dict[str, str]]
+
+class DecisionState(TypedDict):
+    detected_decision: str
+    context: str
+    user_input: str
+    memories: str
+    
+    # State accumulated by Orchestrator
+    paths: List[str]
+    factors: List[Dict[str, str]]
+    
+    # State accumulated by Swarm (using annotated reduce for parallel array append)
+    evaluations: Annotated[List[PathEvaluationResult], operator.add]
+    
+    # Final state
+    synthesis: str
+    blindspots: List[str]
+    recommendation: str
+
+class PathEvalState(TypedDict):
+    # The state sent to each individual Path Evaluator node
+    path_name: str
+    detected_decision: str
+    context: str
+    user_input: str
+    memories: str
+    factors: List[Dict[str, str]]
+
+
+# --- 3. Initialize LLM ---
+llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+llm_json_orchestrator = llm.with_structured_output(OrchestratorOutput)
+llm_json_evaluator = llm.with_structured_output(PathEvaluationModel)
+llm_json_synthesis = llm.with_structured_output(SynthesisOutputModel)
+
+
+# --- 4. Define Nodes ---
+
+def orchestrator_node(state: DecisionState):
+    """Discovers paths and dynamic factors."""
+    prompt = f"""
+    You are a strategic decision orchestrator.
+    DECISION: {state['detected_decision']}
+    CONTEXT: {state['context']}
+    USER REQUEST: {state['user_input']}
+    MEMORIES: {state['memories']}
+    
+    Analyze the situation and output:
+    1. A list of 2 to 4 distinct, realistic paths the user could take. Ensure they are mutually exclusive.
+    2. A list of 3 to 5 dynamic factors that are critical for evaluating this decision (e.g., 'Startup Capital', 'Spouse Support', 'Burnout Risk').
     """
-    Load the detailed instructions for a specific decision framework skill.
-    Pass the name of the skill exactly as listed in the catalog.
-    """
-    if skill_name in SKILL_CATALOG:
-        return f"SUCCESSFULLY LOADED SKILL: {skill_name}\n\n{SKILL_CATALOG[skill_name]['content']}"
-    return f"ERROR: Skill '{skill_name}' not found."
-
-# 3. Initialize the LLM
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
-
-# 4. Create the Agent using the progressive skill-loading pattern
-def get_system_prompt() -> str:
-    catalog_list = "\n".join([f"- **{name}**: {data['description']}" for name, data in SKILL_CATALOG.items()])
     
-    return (
-        "You are the Smart Diary Decision Assistant — a deeply empathetic and analytically rigorous life coach. "
-        "Your goal is to help the user deeply understand a decision they are struggling with, using their diary as context.\n\n"
-        "You have access to a catalog of specialized decision frameworks. "
-        f"Available skills:\n{catalog_list}\n\n"
-        "FRAMEWORK SELECTION — read the decision carefully and pick EXACTLY ONE:\n\n"
-        "→ **10_10_10_rule**: User is anxious, fearful, or emotionally stuck. The decision feels urgent or scary right now. "
-        "Use this to give them time-horizon perspective (10 min / 10 months / 10 years) and cut through the emotion.\n\n"
-        "→ **weighted_matrix**: There are 2 or more specific, named options to compare (e.g. 'Option A vs Option B'). "
-        "The user needs structured, analytical scoring across dimensions to see which option wins on paper.\n\n"
-        "→ **second_order_thinking**: The decision has complex, non-obvious long-term ripple effects. "
-        "The user is underestimating what happens next — use this to map cascading 1st, 2nd, 3rd order consequences.\n\n"
-        "ALWAYS call `load_skill` first to get the full instructions before analyzing. "
-        "NEVER attempt the analysis without loading the skill first. "
-        "Your analysis must be deeply personal to the user's diary context — reference specific memories and details, never give generic advice."
-    )
-
-decision_agent = create_react_agent(
-    model=llm,
-    tools=[load_skill],
-    prompt=get_system_prompt()
-)
-
-def _extract_json(text: str) -> str:
-    """Aggressively extracts JSON from a string, handling markdown wrappers."""
-    text = text.strip()
-    if text.startswith("```"):
-        # Use regex to find content between ```json and ```
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-        if match:
-            text = match.group(1).strip()
-    
-    # Optional fallback: try to find the first { and last }
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start:end+1]
-        
-    return text
-
-def run_decision_agent(detected_decision: str, context: str, user_input: str, memories: str = "") -> dict:
-    """Entry point to trigger the Decision Agent."""
-    
-    # Build the memory context block — injected first so it grounds all analysis
-    memory_block = ""
-    if memories:
-        memory_block = (
-            f"{memories}\n\n"
-            "---\n"
-            "The above memories are extracted facts from this user's past diary entries. "
-            "They represent real things they have written about their life. "
-            "Ground your entire analysis in these facts — reference them explicitly.\n\n"
-        )
-    
-    prompt = (
-        f"{memory_block}"
-        f"DECISION: {detected_decision}\n\n"
-        f"RECENT DIARY CONTEXT:\n{context}\n\n"
-        f"USER REQUEST: {user_input}\n\n"
-        "INSTRUCTIONS:\n"
-        "1. Select the BEST framework from your catalog and call `load_skill` first.\n"
-        "2. You MUST compare at least TWO paths. If the user only mentions one (e.g. 'Should I quit?'), "
-        "your paths MUST be 'Path A: Quit' and 'Path B: Status Quo (Don't quit)'.\n"
-        "3. For every path, you MUST explicitly analyze the impact on these 4 Life Domains: "
-        "**Finance/Career**, **Family/Relationships**, **Future Trajectory**, and **Mental Health**.\n"
-        "4. Ground your analysis in the provided memories and diary context. Be specific, personal, and analytical.\n"
-        "5. Return the analysis in the exact JSON format required by the skill."
-    )
-    
-    result = decision_agent.invoke({"messages": [("user", prompt)]})
-    final_message = result["messages"][-1].content
-    
-    # Strip markdown so frontend can safely JSON.parse
-    clean_json = _extract_json(final_message)
-    
-    # Extract which framework was used from tool calls
-    framework_used = "auto-selected"
-    for message in result["messages"]:
-        if hasattr(message, "tool_calls"):
-            for call in message.tool_calls:
-                if call["name"] == "load_skill":
-                    framework_used = call["args"].get("skill_name", framework_used)
+    response = llm_json_orchestrator.invoke([SystemMessage(content=prompt)])
     
     return {
-        "analysis_result": clean_json,
-        "framework_used": framework_used
+        "paths": response.paths,
+        "factors": [{"name": f.name, "description": f.description} for f in response.factors]
+    }
+
+def map_paths(state: DecisionState):
+    """Maps the discovered paths to parallel evaluator nodes."""
+    sends = []
+    for path in state["paths"]:
+        sends.append(Send("evaluator_node", {
+            "path_name": path,
+            "detected_decision": state["detected_decision"],
+            "context": state["context"],
+            "user_input": state["user_input"],
+            "memories": state["memories"],
+            "factors": state["factors"]
+        }))
+    return sends
+
+def evaluator_node(state: PathEvalState):
+    """Evaluates a single path against the factors (Runs in parallel)."""
+    factors_str = "\n".join([f"- {f['name']}: {f['description']}" for f in state['factors']])
+    
+    prompt = f"""
+    You are a rigorous Path Evaluator.
+    You are evaluating ONE specific path: "{state['path_name']}"
+    
+    DECISION: {state['detected_decision']}
+    MEMORIES: {state['memories']}
+    
+    You must evaluate this path against these specific factors:
+    {factors_str}
+    
+    For each factor, strictly define the POSITIVE impacts and NEGATIVE impacts of taking this path.
+    Ground your analysis in the provided memories. Be specific.
+    """
+    
+    response = llm_json_evaluator.invoke([SystemMessage(content=prompt)])
+    
+    eval_factors = []
+    for f in response.factors:
+        eval_factors.append({
+            "factor_name": f.factor_name,
+            "positive_impact": f.positive_impact,
+            "negative_impact": f.negative_impact
+        })
+        
+    return {
+        "evaluations": [{
+            "path_name": state["path_name"],
+            "factors": eval_factors
+        }]
+    }
+
+def synthesis_node(state: DecisionState):
+    """Synthesizes all evaluations into a final recommendation."""
+    evals_str = json.dumps(state["evaluations"], indent=2)
+    
+    prompt = f"""
+    You are a Synthesis Agent. You have received the evaluations of multiple paths.
+    
+    EVALUATIONS:
+    {evals_str}
+    
+    DECISION: {state['detected_decision']}
+    MEMORIES: {state['memories']}
+    
+    Provide a compassionate summary, identify blindspots across the evaluations, and give a decisive recommendation.
+    """
+    
+    response = llm_json_synthesis.invoke([SystemMessage(content=prompt)])
+    
+    return {
+        "synthesis": response.summary,
+        "blindspots": response.blindspots,
+        "recommendation": response.recommendation
+    }
+
+
+# --- 5. Build Graph ---
+
+builder = StateGraph(DecisionState)
+builder.add_node("orchestrator_node", orchestrator_node)
+builder.add_node("evaluator_node", evaluator_node)
+builder.add_node("synthesis_node", synthesis_node)
+
+builder.add_edge(START, "orchestrator_node")
+builder.add_conditional_edges("orchestrator_node", map_paths, ["evaluator_node"])
+builder.add_edge("evaluator_node", "synthesis_node")
+builder.add_edge("synthesis_node", END)
+
+decision_swarm = builder.compile()
+
+# --- 6. Entry Point ---
+
+def run_decision_agent(detected_decision: str, context: str, user_input: str, memories: str = "") -> dict:
+    """Entry point to trigger the Decision Swarm."""
+    
+    initial_state = {
+        "detected_decision": detected_decision,
+        "context": context,
+        "user_input": user_input,
+        "memories": memories,
+        "evaluations": []
+    }
+    
+    final_state = decision_swarm.invoke(initial_state)
+    
+    # Format the output to match what the frontend expects
+    final_json = {
+        "summary": final_state["synthesis"],
+        "paths": final_state["evaluations"],
+        "blindspots": final_state["blindspots"],
+        "recommendation": final_state["recommendation"]
+    }
+    
+    return {
+        "analysis_result": json.dumps(final_json),
+        "framework_used": "dynamic_swarm"
     }
 
