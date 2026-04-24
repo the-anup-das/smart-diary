@@ -38,6 +38,10 @@ class FeedbackReportSchema(BaseModel):
     openLoops: list[str] = Field(description="List of actionable tasks, worries, or unresolved issues from the text.")
     cognitiveReframes: list[CognitiveReframe] = Field(description="CBT positive reframes for negative thoughts.")
     topics: list[TopicWeight] = Field(description="Percentage breakdown of the entry's primary focus areas. List of topic/weight pairs summing to 1.0.")
+    selfFocusScore: int = Field(ge=1, le=10, description="Score from 1 (Focused on others/environment) to 10 (Extremely self-focused/I-centric).")
+    selfFocusFeedback: str = Field(description="Brief, gentle psychological insight about their focus balance.")
+    repetitiveWords: list[str] = Field(description="List of words or short phrases overused in this entry (3-5 items).")
+    repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
 
 def _tokenize(text: str) -> set[str]:
     """Extract lowercase alphabetic words from text."""
@@ -85,6 +89,9 @@ def _build_response(feedback, cached: bool = False):
             "wordCount": feedback.word_count,
             "uniqueWordCount": feedback.unique_word_count,
             "newWords": feedback.new_words,
+            "selfFocusScore": feedback.self_focus_score,
+            "selfFocusFeedback": feedback.self_focus_feedback,
+            "repetitiveWording": feedback.repetitive_wording,
         }
     }
 
@@ -129,7 +136,17 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
     vocab_stats = _compute_vocab_stats(user_id, raw_text, entry.id, db)
     
     try:
-        system_prompt = "You are an empathetic, clinical AI psychologist and highly advanced grammar engine observing a diary. Parse their entry directly into the strict JSON parameters requested. Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0."
+        system_prompt = (
+            "You are an empathetic, clinical AI psychologist and highly advanced grammar/writing coach observing a diary. "
+            "Parse their entry directly into the strict JSON parameters requested. "
+            "Deploy Cognitive Behavioral Therapy to reframe explicit negative thoughts. "
+            "For topics, identify the primary life areas discussed and assign percentage weights summing to 1.0.\n\n"
+            "SPECIAL FOCUS (Writing Mirror):\n"
+            "1. Self-Focus: Analyze if the user is talking excessively about 'I/me/my' or ruminating inward. "
+            "A score of 1 means they are observing the world/others; 10 means they are entirely self-absorbed. "
+            "Provide gentle feedback on balancing this focus.\n"
+            "2. Repetitive Wording: Identify words or phrases used too frequently. Suggest more descriptive or varied language."
+        )
         custom_persona = preferences.get("custom_persona_prompt", "")
         if custom_persona:
             system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
@@ -163,6 +180,12 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "word_count": vocab_stats["word_count"],
             "unique_word_count": vocab_stats["unique_word_count"],
             "new_words": vocab_stats["new_words"],
+            "self_focus_score": parsed.selfFocusScore,
+            "self_focus_feedback": parsed.selfFocusFeedback,
+            "repetitive_wording": {
+                "words": parsed.repetitiveWords,
+                "feedback": parsed.repetitiveWordingFeedback
+            }
         }
         
         if existing_feedback:

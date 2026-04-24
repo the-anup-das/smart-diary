@@ -46,6 +46,12 @@ class FeedbackReport(Base):
     word_count = Column(Integer, nullable=True)
     unique_word_count = Column(Integer, nullable=True)
     new_words = Column(JSON, nullable=True)
+    
+    # Writing Style Insights
+    self_focus_score = Column(Integer, nullable=True) # 1-10 (1=World focused, 10=Self focused)
+    self_focus_feedback = Column(Text, nullable=True)
+    repetitive_wording = Column(JSON, nullable=True) # {"words": ["word1", "word2"], "feedback": "..."}
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     entry = relationship("JournalEntry", back_populates="feedback")

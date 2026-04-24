@@ -1,5 +1,5 @@
 import * as React from "react"
-import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit } from "lucide-react"
+import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
 export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { feedback: any, preferences?: any, onClose?: () => void }) {
@@ -112,6 +112,39 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
               </li>
             ))}
           </ul>
+        </GlassCard>
+      )}
+
+      {/* Writing Perspective */}
+      {feedback.selfFocusFeedback && (
+        <GlassCard>
+          <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center"><PenTool className="w-5 h-5 mr-2 text-indigo-500" /> Writing Perspective</h3>
+          <div className="p-4 rounded-xl border border-indigo-500/20 bg-indigo-500/5">
+            <p className="text-sm text-gray-700 dark:text-gray-300">
+              {feedback.selfFocusFeedback}
+            </p>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Vocabulary Echoes */}
+      {feedback.repetitiveWording && Array.isArray(feedback.repetitiveWording.words) && feedback.repetitiveWording.words.length > 0 && (
+        <GlassCard>
+          <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center"><Hash className="w-5 h-5 mr-2 text-amber-500" /> Vocabulary Echoes</h3>
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {feedback.repetitiveWording.words.map((word: string, i: number) => (
+                <span key={i} className="px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 text-sm font-medium">
+                  {word}
+                </span>
+              ))}
+            </div>
+            {feedback.repetitiveWording.feedback && (
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 italic">
+                {feedback.repetitiveWording.feedback}
+              </p>
+            )}
+          </div>
         </GlassCard>
       )}
     </div>
