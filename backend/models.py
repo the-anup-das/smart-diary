@@ -53,6 +53,13 @@ class FeedbackReport(Base):
     repetitive_wording = Column(JSON, nullable=True) # {"words": ["word1", "word2"], "feedback": "..."}
     detected_decision = Column(String, nullable=True) # Topic of a decision detected in the entry
 
+    # Find Your Energy
+    energy_data = Column(JSON, nullable=True)
+    
+    # Token Usage
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     
