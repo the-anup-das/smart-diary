@@ -10,33 +10,114 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docker.com)
 
-[Features](#-features) · [Tech Stack](#-tech-stack) · [Getting Started](#-getting-started) · [Contributing](./CONTRIBUTING.md)
+[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Getting Started](#-getting-started) · [Ecosystem](#-my-ecosystem)
 
 </div>
 
 ---
 
-## ✨ Features
+## 🎯 What Problem We Solve
+*Journaling is powerful, but extracting long-term insights is tedious.* 
+Most people write daily but rarely look back to identify patterns in their mood, vocabulary, or emotional state. 
+This project brings the power of Generative AI and LLMs to your personal thoughts, turning scattered diary entries into structured, actionable insights—without compromising your privacy.
 
-- 📝 **Rich Journal Editor** — Write daily entries with a clean, distraction-free editor (powered by Tiptap)
-- 🤖 **AI Analysis** — Each entry is analyzed by OpenAI to produce mood scores, sentiment, grammar feedback, and cognitive reframes
-- 📊 **Insights Dashboard** — Visualize mood trends, vocabulary growth, writing streaks, and emotional patterns over time
-- 🔁 **Open Loops Tracker** — AI automatically detects unresolved tasks and commitments from your entries
-- 🔐 **Private & Self-hosted** — All data stays on your own machine; no third-party storage
-- 🌗 **Dark / Light Mode** — Sleek UI with full theme support
+## 💡 How We Solve It & Why It Matters
+By passing your encrypted local entries through state-of-the-art LLMs (like GPT-4o or local Ollama instances), Notebook automatically acts as a cognitive behavioral assistant. 
+It analyzes sentiment, detects emotional trends, tracks open loops (unresolved tasks), and offers cognitive reframes. It matters because it transforms journaling from a passive dumping ground into an active partner for personal growth.
+
+## 🚀 Why It's Hard & Better Than Existing Apps
+- **Privacy vs. Intelligence:** Most smart diaries upload your intimate thoughts to third-party servers. We give you full control with self-hosting and local LLM support.
+- **Complex Orchestration:** Extracting structured JSON (mood scores, sentiment, open loops) from unstructured, emotional text consistently is technically challenging. 
+- **Offline-First Resilience:** Notebook handles network instability and queues LLM analysis gracefully using a custom PWA-ready architecture.
+- **No Lock-in:** Your data is yours. PostgreSQL backed, easily exportable, totally private.
 
 ---
 
-## 🛠 Tech Stack
+## 🏗️ System Architecture
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
-| **Backend** | FastAPI, Python 3.12, SQLAlchemy, Uvicorn |
-| **Database** | PostgreSQL 15 |
-| **AI** | OpenAI API (GPT-4o / compatible) |
-| **Auth** | JWT (python-jose + jose) |
-| **Infrastructure** | Docker Compose |
+Our architecture is designed for privacy, performance, and robust AI integration.
+
+```mermaid
+flowchart TD
+    subgraph Client [Client / User Device]
+        UI[Next.js PWA<br>Rich Text Editor]
+        LocalSync[(Local Sync Queue<br>IndexedDB)]
+        UI <--> |Offline Fallback| LocalSync
+    end
+
+    subgraph Server [Backend / Home Server]
+        API[FastAPI<br>REST & JWT Auth]
+        PromptEngine[Dynamic Prompting<br>Engine]
+        DB[(PostgreSQL<br>Relational + JSONB)]
+        
+        API --> |1. Save Raw Entry| DB
+        API --> |2. Trigger Analysis| PromptEngine
+        PromptEngine --> |4. Store JSON Insights| DB
+    end
+
+    subgraph AI [LLM Provider]
+        LLM[OpenAI API / Local Ollama<br>Structured Output Parser]
+    end
+
+    UI -->|HTTPS / JWT| API
+    PromptEngine -->|3. Optimized Prompt| LLM
+    LLM -->|Extracted JSON| PromptEngine
+```
+
+
+### Data Flow
+1. **User Input:** User writes a diary entry in the rich text editor (PWA / Web).
+2. **Preprocessing:** The frontend sanitizes the input and queues the request. If offline, the request is stored locally.
+3. **API Layer:** FastAPI receives the entry, authenticates via JWT, and saves the raw text to PostgreSQL.
+4. **LLM Analysis Pipeline:**
+   - The backend constructs an optimized prompt wrapping the user's text.
+   - It calls the LLM (OpenAI API or Local LLM) requesting structured JSON output.
+   - The LLM extracts: Mood Score (1-10), Sentiment, Vocabulary Metrics, Cognitive Reframes, and Open Loops.
+5. **Post-processing & Storage:** The extracted data is validated against strict Pydantic schemas and stored relationally alongside the entry.
+6. **Pattern Recognition:** Aggregation endpoints crunch the historical AI data to generate the Insights Dashboard.
+
+### Frontend (FE) & Backend (BE) Interaction
+- **Next.js (BFF):** Acts as a secure proxy and handles server-side rendering, caching, and PWA capabilities.
+- **FastAPI:** Exposes RESTful endpoints for CRUD and AI analysis. Heavy LLM processing is handled asynchronously to keep the UI snappy.
+- **Database:** PostgreSQL stores both relational metadata (users, dates) and unstructured JSON (LLM analysis results).
+
+---
+
+## ⚙️ Core System Features (Under the Hood)
+- **Local-First Sync Queue:** A custom React queue persists entries locally when offline and syncs them when connectivity is restored.
+- **Resilient AI Extraction:** Fallback mechanisms and retries for LLM structured output parsing.
+- **Dynamic Prompting Engine:** Context-aware prompts that adapt based on the user's entry length and historical data.
+- **Progressive Web App (PWA):** Installable locally with offline caching for a native-like experience.
+
+---
+
+## 📐 Design Decisions
+- **Next.js + FastAPI:** Next.js for excellent frontend UX and PWA support; FastAPI because Python remains the undisputed king of AI/LLM orchestration.
+- **Docker-First:** Packaged specifically for Home Servers and NAS environments to make self-hosting frictionless.
+- **Bring Your Own LLM (BYOK):** We enforce no vendor lock-in. Use OpenAI, or point the base URL to a local Ollama instance for 100% air-gapped privacy.
+
+---
+
+## 🚧 Limitations
+- **LLM Latency:** Cloud API calls can take 2-5 seconds depending on entry length.
+- **Local Hardware Requirements:** Running a local LLM requires significant RAM/VRAM, making it challenging on lower-end NAS devices.
+- **Token Limits:** Extremely long entries might exceed context windows if not chunked properly.
+
+---
+
+## 🔮 Future Improvements
+- **RAG (Retrieval-Augmented Generation):** "Chat with your past self" by vectorizing historical entries.
+- **Semantic Search:** Find entries based on concepts rather than exact keywords.
+- **Voice-to-Text Integration:** Whisper integration for audio journaling.
+- **More Granular Offline Support:** Complete offline editing and conflict resolution.
+
+---
+
+## 🌐 My Ecosystem
+
+Discover more of my projects:
+- [Smart Diary](https://github.com/the-anup-das/smart-diary) - The main repository for this project.
+- [GitHub Profile](https://github.com/the-anup-das) - Check out my other open-source tools and contributions.
 
 ---
 
