@@ -2,7 +2,7 @@
 
 # 📔 Notebook — AI-Powered Personal Diary
 
-**A private, self-hosted journaling app with AI-driven insights, mood tracking, and personal growth analytics.**
+**A private, self-hosted journaling app with Multi-Agent Swarm reasoning and Long-Term Memory.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docker.com)
 
-[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Getting Started](#-getting-started) · [Ecosystem](#-my-ecosystem)
+[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Decision Swarm](#-decision-swarm-architecture) · [Getting Started](#-getting-started)
 
 </div>
 
@@ -18,238 +18,128 @@
 
 ## 🎯 What Problem We Solve
 *Journaling is powerful, but extracting long-term insights is tedious.* 
-Most people write daily but rarely look back to identify patterns in their mood, vocabulary, or emotional state. 
-This project brings the power of Generative AI and LLMs to your personal thoughts, turning scattered diary entries into structured, actionable insights—without compromising your privacy.
+Notebook transforms your scattered diary entries into a structured, actionable knowledge base. By integrating **Long-Term Memory (Mem0)** and a **Multi-Agent Decision Swarm**, it acts as a cognitive behavioral assistant that actually *remembers* your life history to provide grounded, personal advice.
 
 ## 💡 How We Solve It & Why It Matters
-By passing your encrypted local entries through state-of-the-art LLMs (like GPT-4o or local Ollama instances), Notebook automatically acts as a cognitive behavioral assistant. 
-It analyzes sentiment, detects emotional trends, tracks open loops (unresolved tasks), and offers cognitive reframes. It matters because it transforms journaling from a passive dumping ground into an active partner for personal growth.
+Notebook goes beyond simple sentiment analysis. It uses a **StateGraph-based workflow** to break down complex life decisions into dynamic paths. 
+- **Long-Term Context:** Uses **Qdrant** and **Mem0** to store and retrieve your values, fears, and history across months of entries.
+- **Deep Reasoning:** Employs a **Map-Reduce Swarm** to evaluate multiple paths in parallel, ensuring no option is rushed or ignored.
 
-## 🚀 Why It's Hard & Better Than Existing Apps
-- **Privacy vs. Intelligence:** Most smart diaries upload your intimate thoughts to third-party servers. We give you full control with self-hosting and local LLM support.
-- **Complex Orchestration:** Extracting structured JSON (mood scores, sentiment, open loops) from unstructured, emotional text consistently is technically challenging. 
-- **Offline-First Resilience:** Notebook handles network instability and queues LLM analysis gracefully using a custom PWA-ready architecture.
-- **No Lock-in:** Your data is yours. PostgreSQL backed, easily exportable, totally private.
+## 🧠 Why Decision-Making is Hard (And How We Fix It)
+
+Decision-making is one of the most cognitively demanding human tasks. Notebook is built to solve three specific psychological bottlenecks:
+
+1. **Emotional Fog & Urgency Bias:** When we face a tough choice, the "scary" option creates immediate anxiety that clouds long-term judgment.
+   - **Fix:** Our **Evaluator Swarm** forces a slow, analytical breakdown of every path, moving you from "fight-or-flight" to "system 2" thinking.
+2. **Personal Information Amnesia:** We often forget our own values, past patterns, and hard-won lessons during a crisis.
+   - **Fix:** **Mem0 Long-Term Memory** retrieves relevant facts from your past entries (e.g., "You've felt this burnout before in 2022") to ground the advice in your real history.
+3. **Linear Thinking vs. Ripple Effects:** Humans are naturally bad at seeing "Third-Order Consequences" (the ripple effects of a ripple effect).
+   - **Fix:** The **Synthesis Node** is specifically trained to look for **Blindspots**—the things you are romanticizing or ignoring—helping you see the full chess board.
 
 ---
 
 ## 🏗️ System Architecture
 
-Our architecture is designed for privacy, performance, and robust AI integration.
+Our architecture is designed for privacy, memory-depth, and advanced reasoning.
 
 ```mermaid
 flowchart TD
     subgraph Client [Client / User Device]
-        UI[Next.js PWA<br>Rich Text Editor]
-        LocalSync[(Local Sync Queue<br>IndexedDB)]
-        UI <--> |Offline Fallback| LocalSync
+        UI[Next.js PWA]
+        LocalSync[(Local Queue)]
     end
 
     subgraph Server [Backend / Home Server]
-        API[FastAPI<br>REST & JWT Auth]
-        PromptEngine[Dynamic Prompting<br>Engine]
-        DB[(PostgreSQL<br>Relational + JSONB)]
+        API[FastAPI REST]
+        Graph[LangGraph Swarm Engine]
+        DB[(PostgreSQL)]
+        Memory[(Mem0 + Qdrant Vector Store)]
         
-        API --> |1. Save Raw Entry| DB
-        API --> |2. Trigger Analysis| PromptEngine
-        PromptEngine --> |4. Store JSON Insights| DB
+        API --> |1. Save Entry| DB
+        API --> |2. Ingest Fact| Memory
+        API --> |3. Trigger Decision| Graph
+        Graph --> |4. Context Retrieval| Memory
+        Graph --> |5. Store Analysis| DB
     end
 
     subgraph AI [LLM Provider]
-        LLM[OpenAI API / Local Ollama<br>Structured Output Parser]
+        LLM[OpenAI / Local LLM]
     end
 
-    UI -->|HTTPS / JWT| API
-    PromptEngine -->|3. Optimized Prompt| LLM
-    LLM -->|Extracted JSON| PromptEngine
+    UI --> API
+    Graph --> LLM
 ```
-
-
-### Data Flow
-1. **User Input:** User writes a diary entry in the rich text editor (PWA / Web).
-2. **Preprocessing:** The frontend sanitizes the input and queues the request. If offline, the request is stored locally.
-3. **API Layer:** FastAPI receives the entry, authenticates via JWT, and saves the raw text to PostgreSQL.
-4. **LLM Analysis Pipeline:**
-   - The backend constructs an optimized prompt wrapping the user's text.
-   - It calls the LLM (OpenAI API or Local LLM) requesting structured JSON output.
-   - The LLM extracts: Mood Score (1-10), Sentiment, Vocabulary Metrics, Cognitive Reframes, and Open Loops.
-5. **Post-processing & Storage:** The extracted data is validated against strict Pydantic schemas and stored relationally alongside the entry.
-6. **Pattern Recognition:** Aggregation endpoints crunch the historical AI data to generate the Insights Dashboard.
-
-### Frontend (FE) & Backend (BE) Interaction
-- **Next.js (BFF):** Acts as a secure proxy and handles server-side rendering, caching, and PWA capabilities.
-- **FastAPI:** Exposes RESTful endpoints for CRUD and AI analysis. Heavy LLM processing is handled asynchronously to keep the UI snappy.
-- **Database:** PostgreSQL stores both relational metadata (users, dates) and unstructured JSON (LLM analysis results).
 
 ---
 
-## ⚙️ Core System Features (Under the Hood)
-- **Local-First Sync Queue:** A custom React queue persists entries locally when offline and syncs them when connectivity is restored.
-- **Resilient AI Extraction:** Fallback mechanisms and retries for LLM structured output parsing.
-- **Dynamic Prompting Engine:** Context-aware prompts that adapt based on the user's entry length and historical data.
-- **Progressive Web App (PWA):** Installable locally with offline caching for a native-like experience.
+## 🐝 Decision Swarm Architecture (Multi-Agent)
+
+We have moved away from rigid, single-shot frameworks. The **Decision Junction** now uses a high-performance Swarm architecture:
+
+1.  **Orchestrator Node:** Analyzes the decision and retrieves relevant **Mem0** facts. It dynamically discovers the best **Paths** (e.g., "Quit", "Stay", "Bridge") and **Factors** (e.g., "Burnout Risk", "Financial Runway") for *this specific* situation.
+2.  **Evaluator Swarm (Parallel):** Spins up independent agents for *each* discovered path. Each agent evaluates its path against the factors, strictly defining **Positives (+)** and **Negatives (-)**.
+3.  **Synthesis Node:** Consolidates all parallel evaluations, detects blindspots (e.g., "You are romanticizing the workload"), and provides a grounded recommendation.
+
+---
+
+## ⚙️ Core System Features
+- **Mem0 Integration:** Local, self-hosted long-term memory via Qdrant. The AI "remembers" your spouse's name, your career goals, and past fears.
+- **Dynamic Reasoning:** No more hardcoded categories. The AI discovers what factors matter most for your specific life event.
+- **PWA Excellence:** Offline-first editing with a custom React sync queue.
+- **NAS Optimized:** Built for Synology/QNAP/Home Servers with x86 and ARM64 support.
 
 ---
 
 ## 📐 Design Decisions
-- **Next.js + FastAPI:** Next.js for excellent frontend UX and PWA support; FastAPI because Python remains the undisputed king of AI/LLM orchestration.
-- **Docker-First:** Packaged specifically for Home Servers and NAS environments to make self-hosting frictionless.
-- **Bring Your Own LLM (BYOK):** We enforce no vendor lock-in. Use OpenAI, or point the base URL to a local Ollama instance for 100% air-gapped privacy.
-
----
-
-## 🚧 Limitations
-- **LLM Latency:** Cloud API calls can take 2-5 seconds depending on entry length.
-- **Local Hardware Requirements:** Running a local LLM requires significant RAM/VRAM, making it challenging on lower-end NAS devices.
-- **Token Limits:** Extremely long entries might exceed context windows if not chunked properly.
-
----
-
-## 🔮 Future Improvements
-- **RAG (Retrieval-Augmented Generation):** "Chat with your past self" by vectorizing historical entries.
-- **Semantic Search:** Find entries based on concepts rather than exact keywords.
-- **Voice-to-Text Integration:** Whisper integration for audio journaling.
-- **More Granular Offline Support:** Complete offline editing and conflict resolution.
-
----
-
-## 🌐 My Ecosystem
-
-Discover more of my projects:
-- [Smart Diary](https://github.com/the-anup-das/smart-diary) - The main repository for this project.
-- [GitHub Profile](https://github.com/the-anup-das) - Check out my other open-source tools and contributions.
+- **LangGraph for Orchestration:** Allows for complex state-management and parallel "swarm" reasoning that simple prompt chains cannot achieve.
+- **Vector-First Memory:** Every entry is processed for "facts" which are stored in a vector database, allowing the Decision Agent to ground its advice in your actual history.
+- **Docker-First:** Packaged specifically for Home Servers to keep your data 100% private.
 
 ---
 
 ## 🚀 Getting Started
 
 ### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- An OpenAI API key (or local Ollama instance)
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
-- An [OpenAI API key](https://platform.openai.com/api-keys)
-
-### 1. Clone the repository
-
+### 1. Clone & Setup
 ```bash
-git clone https://github.com/your-username/notebook.git
-cd notebook
-```
-
-### 2. Configure environment variables
-
-```bash
+git clone https://github.com/the-anup-das/smart-diary.git
+cd smart-diary
 cp .env.example .env
 ```
 
-Open `.env` and fill in your values:
-
+### 2. Configure Environment
 ```env
-# Database — matches the docker-compose defaults
-DATABASE_URL="postgresql://diary_user:diary_password@localhost:5432/diary_db?schema=public"
+# Database
+DATABASE_URL="postgresql://diary_user:diary_password@localhost:5432/diary_db"
 
-# Your OpenAI API key
+# AI & Memory
 OPENAI_API_KEY="sk-proj-..."
-
-# Optional: Use a local LLM or proxy instead
-OPENAI_BASE_URL="https://api.openai.com/v1"
+MEM0_DIR="/app/mem0_db"
+QDRANT_URL="http://qdrant:6333"
 ```
 
-### 3. Start everything with Docker
-
+### 3. Start everything
 ```bash
 docker compose up --build
 ```
-
-This starts three containers:
-- **PostgreSQL** on port `5432`
-- **FastAPI backend** on port `8000`
-- **Next.js frontend** on port `3000`
-
-### 4. Open the app
-
-```
-http://localhost:3000
-```
-
-Create an account, write your first entry, and the AI will analyze it automatically.
-
----
-
-## 🏠 NAS / Home Server Deployment
-
-Smart Diary is optimized for self-hosting on NAS (Synology, QNAP, TrueNAS) or any home server. We use **GitHub Container Registry (GHCR)** to ensure zero rate-limits for our users.
-
-### 📦 Docker Images
-| Component | Image |
-|-----------|-------|
-| **Backend** | `ghcr.io/the-anup-das/smart-diary-backend:latest` |
-| **Frontend** | `ghcr.io/the-anup-das/smart-diary-frontend:latest` |
-
-### 1. Simple Deployment (Docker Compose)
-Download the optimized [docker-compose.nas.yml](./docker-compose.nas.yml) and run:
-
-```bash
-docker-compose -f docker-compose.nas.yml up -d
-```
-
-### 2. Portainer (One-Click)
-Use our [Portainer Template](./portainer-template.json) to deploy directly from your dashboard. This is the recommended way for Synology/QNAP users.
-
-### 3. Hardware Support
-- **Architecture**: Supports **x86_64** (Intel/AMD) and **ARM64** (Raspberry Pi / New NAS models).
-- **Environment**: Ensure `OPENAI_API_KEY` and `JWT_SECRET` are set in your environment.
+This starts **PostgreSQL**, **Qdrant (Vector DB)**, **FastAPI**, and **Next.js**.
 
 ---
 
 ## 📁 Project Structure
-
-```
-notebook/
-├── backend/               # FastAPI Python backend
-│   ├── routers/
-│   │   ├── auth.py        # JWT authentication
-│   │   ├── entries.py     # Journal CRUD
-│   │   ├── analyze.py     # AI analysis pipeline
-│   │   └── insights.py    # Aggregated analytics
-│   ├── models.py          # SQLAlchemy ORM models
-│   ├── database.py        # DB connection setup
-│   ├── main.py            # App entrypoint
-│   └── pyproject.toml     # Python dependencies (uv)
-│
-├── frontend/              # Next.js frontend
-│   └── src/
-│       ├── app/
-│       │   ├── (dashboard)/   # Main journal & insights pages
-│       │   ├── login/         # Auth page
-│       │   └── api/           # Next.js API routes (BFF)
-│       ├── components/        # Reusable UI components
-│       └── lib/               # Auth helpers, API clients
-│
-├── docker-compose.yml     # Full-stack orchestration
-├── .env.example           # Environment variable template
-└── .gitignore
-```
-
----
-
-## 🔑 Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | ✅ | PostgreSQL connection string |
-| `OPENAI_API_KEY` | ✅ | Your OpenAI API key |
-| `OPENAI_BASE_URL` | ❌ | Override for local LLMs (e.g. Ollama) |
-
-> **Never commit your `.env` file.** It is listed in `.gitignore`. Use `.env.example` as the reference template.
+- `backend/skills/decision_agent.py`: The LangGraph Swarm engine.
+- `backend/services/memory_service.py`: Mem0 and Qdrant integration.
+- `frontend/src/app/(dashboard)/decisions/[id]/page.tsx`: Unified Dynamic Swarm UI.
 
 ---
 
 ## 🤝 Contributing
-
-Contributions are welcome and appreciated! Please read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for guidelines on how to get involved.
+Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 
 ## 📄 License
-
-This project is open-source under the [MIT License](./LICENSE).
+MIT License. See [LICENSE](./LICENSE) for details.

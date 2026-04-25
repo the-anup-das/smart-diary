@@ -46,6 +46,14 @@ class FeedbackReport(Base):
     word_count = Column(Integer, nullable=True)
     unique_word_count = Column(Integer, nullable=True)
     new_words = Column(JSON, nullable=True)
+    
+    # Writing Style Insights
+    self_focus_score = Column(Integer, nullable=True) # 1-10 (1=World focused, 10=Self focused)
+    self_focus_feedback = Column(Text, nullable=True)
+    repetitive_wording = Column(JSON, nullable=True) # {"words": ["word1", "word2"], "feedback": "..."}
+    detected_decision = Column(String, nullable=True) # Topic of a decision detected in the entry
+
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     entry = relationship("JournalEntry", back_populates="feedback")
@@ -60,5 +68,24 @@ class OpenLoop(Base):
     source_entry_id = Column(String, ForeignKey("journal_entries.id", ondelete="SET NULL"), nullable=True)
     detected_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
+    
+    user = relationship("User")
+
+class Decision(Base):
+    __tablename__ = "decisions"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    topic = Column(String, nullable=False)
+    status = Column(String, default="active") # active, awaiting_outcome, archived
+    framework = Column(String, nullable=True) # matrix, 10_10_10, etc.
+    factors = Column(JSON, nullable=True) # User defined factors
+    options = Column(JSON, nullable=True) # The paths/options
+    primary_option_id = Column(String, nullable=True)
+    expected_outcome = Column(Text, nullable=True)
+    actual_outcome = Column(Text, nullable=True)
+    review_date = Column(DateTime, nullable=True)
+    analysis_result = Column(JSON, nullable=True)  # Persisted agent output
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     user = relationship("User")

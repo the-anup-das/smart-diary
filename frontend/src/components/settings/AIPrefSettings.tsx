@@ -106,6 +106,11 @@ export function AIPrefSettings() {
               checked={!!prefs?.hide_word_target} 
               onChange={(val: any) => updatePref('hide_word_target', val)} 
            />
+           <ToggleSwitch 
+              label="Hide Decision Junction" 
+              checked={!!prefs?.hide_decisions} 
+              onChange={(val: any) => updatePref('hide_decisions', val)} 
+           />
         </div>
 
 

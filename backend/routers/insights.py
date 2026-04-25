@@ -45,7 +45,7 @@ def _get_previous_range(range_str: str):
 
 @router.get("/api/insights")
 def get_insights(
-    range: str = Query(default="week", regex="^(day|week|month|year|all)$"),
+    range: str = Query(default="week", pattern="^(day|week|month|year|all)$"),
     user_id: str = Depends(verify_session),
     db: Session = Depends(get_db)
 ):
@@ -84,6 +84,8 @@ def get_insights(
     analyzed_count = 0
     total_reframes = 0
     all_new_words = []
+    total_self_focus = 0
+    writing_style_highlights = []
     
     for entry in entries:
         fb = entry.feedback
@@ -109,6 +111,18 @@ def get_insights(
         # Collect new words
         if fb.new_words:
             all_new_words.extend(fb.new_words)
+            
+        # Writing Style
+        if fb.self_focus_score is not None:
+            total_self_focus += fb.self_focus_score
+        
+        if fb.repetitive_wording and fb.repetitive_wording.get("words"):
+            writing_style_highlights.append({
+                "date": entry.date.strftime("%Y-%m-%d"),
+                "words": fb.repetitive_wording["words"],
+                "feedback": fb.repetitive_wording.get("feedback", ""),
+                "self_focus_feedback": fb.self_focus_feedback
+            })
         
         timeline.append({
             "date": entry.date.strftime("%Y-%m-%d"),
@@ -253,6 +267,10 @@ def get_insights(
             "weekly_loops": { "current": total_resolved, "target": targets["weekly_loops"] },
             "weekly_reframes": { "current": total_reframes, "target": targets["weekly_reframes"] },
             "sentiment_diversity": { "current": len([s for s in sentiments if s != "—" and s != "Neutral"]), "target": targets["sentiment_diversity"] },
+        },
+        "writingStyle": {
+            "avgSelfFocus": round(total_self_focus / analyzed_count, 1) if analyzed_count else 0,
+            "highlights": writing_style_highlights[-5:] # Latest 5 highlights
         }
     }
 

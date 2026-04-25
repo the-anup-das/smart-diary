@@ -4,7 +4,8 @@ import { MoodChart } from "@/components/insights/MoodChart"
 import { TopicRing } from "@/components/insights/TopicRing"
 import { VocabChart } from "@/components/insights/VocabChart"
 import { TargetsWidget } from "@/components/insights/TargetsWidget"
-import { TrendingUp, TrendingDown, Brain, BookOpen, Flame, BarChart2, Check, X, Pin, Sparkles } from "lucide-react"
+import { StyleInsights } from "@/components/insights/StyleInsights"
+import { TrendingUp, TrendingDown, Brain, BookOpen, Flame, BarChart2, Check, X, Pin, Sparkles, PenTool } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
 type TimeRange = "day" | "week" | "month" | "year" | "all"
@@ -39,6 +40,15 @@ interface InsightsData {
     totalResolved: number
   }
   targets: any
+  writingStyle?: {
+    avgSelfFocus: number
+    highlights: {
+      date: string
+      words: string[]
+      feedback: string
+      self_focus_feedback: string
+    }[]
+  }
 }
 
 // --- Animated Counter Hook ---
@@ -248,6 +258,17 @@ export default function InsightsPage() {
 
           {/* Open Loops */}
           <OpenLoopsCard loops={data.openLoops} onAction={handleLoopAction} />
+
+          {/* Writing Style Insights */}
+          {data.writingStyle && (
+            <div className="space-y-4">
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center space-x-2 px-1">
+                <PenTool className="w-5 h-5 text-indigo-500" />
+                <span>Writing Style & Perspective</span>
+              </h3>
+              <StyleInsights data={data.writingStyle} />
+            </div>
+          )}
         </div>
       )}
     </div>
