@@ -67,7 +67,8 @@ class PathEvalState(TypedDict):
 
 
 # --- 3. Initialize LLM ---
-llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+import os
+llm = ChatOpenAI(model=os.getenv("CHAT_MODEL", "gpt-4o-mini"), temperature=0.2)
 llm_json_orchestrator = llm.with_structured_output(OrchestratorOutput)
 llm_json_evaluator = llm.with_structured_output(PathEvaluationModel)
 llm_json_synthesis = llm.with_structured_output(SynthesisOutputModel)

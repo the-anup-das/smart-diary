@@ -117,7 +117,7 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
         
     response = client.beta.chat.completions.parse(
-        model="gpt-4o-mini",
+        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
         messages=[
             {
                 "role": "system",

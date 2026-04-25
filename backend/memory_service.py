@@ -25,14 +25,14 @@ _MEM0_CONFIG = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": "gpt-4o-mini",
+            "model": os.getenv("CHAT_MODEL", "gpt-4o-mini"),
             "api_key": os.getenv("OPENAI_API_KEY"),
         }
     },
     "embedder": {
         "provider": "openai",
         "config": {
-            "model": "text-embedding-3-small",
+            "model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
             "api_key": os.getenv("OPENAI_API_KEY"),
         }
     },
