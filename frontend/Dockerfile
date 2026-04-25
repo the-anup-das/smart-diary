@@ -11,6 +11,8 @@ RUN npm install
 COPY . .
 # Disable telemetry during the build.
 ENV NEXT_TELEMETRY_DISABLED=1
+# Set the default backend URL so Next.js bakes the correct proxy rewrite for Docker
+ENV INTERNAL_BACKEND_URL=http://backend:8000
 RUN npm run build
 
 # Stage 2: Production runner
