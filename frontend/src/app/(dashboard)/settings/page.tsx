@@ -4,8 +4,9 @@ import { ProfileSettings } from "@/components/settings/ProfileSettings"
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings"
 import { AIPrefSettings } from "@/components/settings/AIPrefSettings"
 import { DataSettings } from "@/components/settings/DataSettings"
+import { UsageDashboard } from "@/components/settings/UsageDashboard"
 import { TargetsSettings } from "@/components/settings/TargetsSettings"
-import { User, Palette, Brain, Shield, Target } from "lucide-react"
+import { User, Palette, Brain, Shield, Coins, Target } from "lucide-react"
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = React.useState("profile");
@@ -14,6 +15,7 @@ export default function SettingsPage() {
     { id: "profile", label: "Profile", icon: User },
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "ai", label: "AI Preferences", icon: Brain },
+    { id: "usage", label: "Usage & Billing", icon: Coins },
     { id: "data", label: "Data & Security", icon: Shield },
   ];
 
@@ -48,8 +50,9 @@ export default function SettingsPage() {
         <main className="flex-1 min-h-[500px]">
           {activeTab === "profile" && <ProfileSettings />}
           {activeTab === "appearance" && <AppearanceSettings />}
-          {activeTab === "ai" && <AIPrefSettings />}
-          {activeTab === "data" && <DataSettings />}
+          { activeTab === "ai" && <AIPrefSettings /> }
+          { activeTab === "usage" && <UsageDashboard /> }
+          { activeTab === "data" && <DataSettings /> }
         </main>
       </div>
     </div>

@@ -84,9 +84,33 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 
 ## ⚙️ Core System Features
 - **Mem0 Integration:** Local, self-hosted long-term memory via Qdrant. The AI "remembers" your spouse's name, your career goals, and past fears.
+- **Find Your Energy:** A comprehensive mental wellness dashboard tracking daily battery levels, Stoic Circle of Control reframing, and weekly attention heatmaps.
 - **Dynamic Reasoning:** No more hardcoded categories. The AI discovers what factors matter most for your specific life event.
+- **AI Quality Benchmarking:** Integrated **DeepEval** test suite for measuring AI faithfulness and answer relevancy.
+- **Cost Transparency:** Built-in token tracking and estimated cost dashboard to monitor and optimize AI resource usage.
 - **PWA Excellence:** Offline-first editing with a custom React sync queue.
 - **NAS Optimized:** Built for Synology/QNAP/Home Servers with x86 and ARM64 support.
+
+---
+
+## ⚡ Find Your Energy Dashboard
+
+Notebook goes beyond text logs by visualizing your mental energy state:
+
+- **Human Battery:** A visual indicator of your daily energy level, calculated via a multi-dimensional formula (Mood, Chargers/Drainers, Agency, and Rumination).
+- **Circle of Control:** An interactive component that helps you separate controllable vs. uncontrollable factors using Stoic reframing techniques.
+- **Attention Heatmap:** Tracks where your mental energy went over the last 7 days (e.g., Health, Finances, Social).
+- **Tomorrow's Recharge Strategy:** AI-generated forward-looking advice to build or protect energy for the following day.
+
+---
+
+## 📈 AI Quality & Cost Management
+
+We take the reliability and cost of AI seriously:
+
+- **DeepEval Integration:** We use industrial-grade evaluations to ensure the AI's advice is faithful to your diary and relevant to your needs.
+- **Token Efficiency:** All prompts are compressed for token efficiency, and identical entries are cached to ensure zero-cost re-analysis.
+- **Transparency Dashboard:** Track your exact token usage and estimated analysis costs directly in the Settings menu.
 
 ---
 

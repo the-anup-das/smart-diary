@@ -3,7 +3,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useTheme } from "next-themes"
-import { PenSquare, Calendar, BarChart2, Settings, BookHeart, Sun, Moon, ChevronLeft, ChevronRight, Target, GitMerge } from "lucide-react"
+import { PenSquare, Calendar, BarChart2, Settings, BookHeart, Sun, Moon, ChevronLeft, ChevronRight, Target, GitMerge, BatteryCharging } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function Sidebar() {
@@ -18,6 +18,7 @@ export function Sidebar() {
   const navItems = [
     { name: "Today", href: "/", icon: PenSquare },
     { name: "History", href: "/history", icon: Calendar },
+    { name: "Energy", href: "/energy", icon: BatteryCharging },
     { name: "Insights", href: "/insights", icon: BarChart2 },
     { name: "Targets", href: "/targets", icon: Target },
     { name: "Decisions", href: "/decisions", icon: GitMerge },
