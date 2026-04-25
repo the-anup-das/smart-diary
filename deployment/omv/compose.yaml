@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: ghcr.io/${GITHUB_USER}/notebook-frontend:${VERSION:-latest}
+    image: ghcr.io/${GITHUB_USER}/smart-diary-frontend:${VERSION:-latest}
     container_name: notebook-frontend
     restart: unless-stopped
     ports:
@@ -14,7 +14,7 @@ services:
       - backend
 
   backend:
-    image: ghcr.io/${GITHUB_USER}/notebook-backend:${VERSION:-latest}
+    image: ghcr.io/${GITHUB_USER}/smart-diary-backend:${VERSION:-latest}
     container_name: notebook-backend
     restart: unless-stopped
     ports:
