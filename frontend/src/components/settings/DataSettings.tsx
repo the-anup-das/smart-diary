@@ -153,7 +153,7 @@ export function DataSettings() {
             onClick={() => fileInputRef.current?.click()} 
             disabled={importing} 
             className="flex items-center"
-            variant="outline"
+            variant="secondary"
           >
             <Upload className="w-4 h-4 mr-2" />
             {importing ? "Importing..." : "Restore from JSON Backup"}
