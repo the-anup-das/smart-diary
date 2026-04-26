@@ -4,7 +4,7 @@ from database import get_db
 import models
 from .auth import verify_session
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 router = APIRouter()
 
