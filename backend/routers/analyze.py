@@ -325,7 +325,6 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
                     text=loop_text.strip(),
                     text_hash=loop_hash,
                     source_entry_id=entry.id,
-                    category="general",
                     status="open"
                 ))
         db.commit()
