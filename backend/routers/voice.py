@@ -89,15 +89,49 @@ async def _is_model_loaded() -> bool:
 @router.get("/api/voice/status")
 async def voice_status(user_id: str = Depends(verify_session)):
     """
-    Called by the frontend on page load to decide whether to show the mic button.
-
     Returns:
         enabled      – True if STT_BASE_URL is set
         model_loaded – True if the Whisper model is already in RAM
+        error_detail – Descriptive error if the service is unreachable
     """
-    enabled = bool(STT_BASE_URL)
-    loaded = await _is_model_loaded() if enabled else False
-    return {"enabled": enabled, "model_loaded": loaded}
+    if not STT_BASE_URL:
+        return {"enabled": False, "model_loaded": False}
+    
+    try:
+        # Strip trailing /v1 to probe the base server health
+        base = STT_BASE_URL.rstrip("/")
+        async with httpx.AsyncClient(timeout=2.0) as http:
+            res = await http.get(f"{base}/models")
+            
+        if res.status_code != 200:
+            return {
+                "enabled": True, 
+                "model_loaded": False, 
+                "error_detail": f"STT Server returned status {res.status_code}"
+            }
+            
+        data = res.json()
+        model_ids = [m.get("id", "") for m in data.get("data", [])]
+        loaded = any(STT_MODEL in mid for mid in model_ids)
+        
+        return {
+            "enabled": True, 
+            "model_loaded": loaded, 
+            "model": STT_MODEL,
+            "error_detail": None
+        }
+    except httpx.RequestError:
+        return {
+            "enabled": True, 
+            "model_loaded": False, 
+            "error_detail": "STT Server is unreachable. Is the container running?"
+        }
+    except Exception as e:
+        return {
+            "enabled": True, 
+            "model_loaded": False, 
+            "error_detail": str(e)
+        }
 
 
 @router.post("/api/voice/warm")
@@ -145,7 +179,8 @@ async def voice_warm(user_id: str = Depends(verify_session)):
         return {"ok": True}
     except Exception as e:
         # Warm failures are non-fatal — model will load on first real request
-        return {"ok": False, "reason": str(e)}
+        error_msg = getattr(e, "message", str(e))
+        return {"ok": False, "reason": error_msg}
 
 
 @router.post("/api/voice/transcribe")
@@ -193,7 +228,20 @@ async def transcribe_audio(
                 file=f,
                 language="en",
             )
-        return {"text": result.text or ""}
+        
+        text = result.text.strip() if result.text else ""
+        
+        # Whisper Hallucination Catch-All
+        # Even with VAD and prompt steering, Whisper often emits these specific phrases on static.
+        # We only drop them if they are the ONLY words in the 5-second chunk.
+        hallucinations = {
+            "thank you.", "thank you", "thanks for watching.", "thanks for watching",
+            "please subscribe.", "subscribe.", "all right.", "okay.", "you.", "bye."
+        }
+        if text.lower() in hallucinations:
+            return {"text": ""}
+            
+        return {"text": text}
     except openai.APIConnectionError:
         raise HTTPException(
             status_code=503,
@@ -203,6 +251,7 @@ async def transcribe_audio(
             ),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
+        error_msg = getattr(e, "message", str(e))
+        raise HTTPException(status_code=500, detail=f"STT Error: {error_msg}")
     finally:
         os.unlink(tmp_path)

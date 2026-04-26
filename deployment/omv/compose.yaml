@@ -81,5 +81,6 @@ services:
     environment:
       WHISPER__MODEL: "${STT_MODEL:-Systran/faster-whisper-base.en}"
       WHISPER__MODEL_LOAD_TTL: 1800   # auto-unload from RAM after 30 min idle
+      WHISPER__VAD_FILTER: "True"     # auto-filter silence and hallucinations
     volumes:
       - /AppData/notebook/stt_models:/root/.cache/huggingface

@@ -26,7 +26,10 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
   const [sttEnabled, setSttEnabled] = React.useState(false)
+  const [sttModel, setSttModel] = React.useState<string>("")
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  const typeQueueRef = React.useRef<string[]>([])
+  const isTypingRef = React.useRef(false)
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -46,7 +49,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       .then(data => {
         if (data.enabled) {
           setSttEnabled(true)
-          // Fire-and-forget: pre-load the Whisper model while the user writes
+          if (data.model) setSttModel(data.model)
           fetch("/api/voice/warm", { method: "POST" }).catch(() => {})
         }
       })
@@ -232,14 +235,37 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }
 
-  const handleTranscript = React.useCallback((text: string) => {
-    if (!editor) return
-    // Move cursor to the very end, then insert the transcribed text.
-    // A space is prepended unless the document is empty.
-    editor.commands.focus('end')
-    const isEmpty = editor.getText().trim().length === 0
-    editor.commands.insertContent(isEmpty ? text : ' ' + text)
+  const processTypeQueue = React.useCallback(() => {
+    if (isTypingRef.current || typeQueueRef.current.length === 0 || !editor) return
+    isTypingRef.current = true
+
+    const textToType = typeQueueRef.current.shift() || ""
+    const chars = textToType.split("")
+    let i = 0
+
+    const interval = setInterval(() => {
+      editor.commands.focus('end')
+      editor.commands.insertContent(chars[i])
+      i++
+      
+      if (i >= chars.length) {
+        clearInterval(interval)
+        isTypingRef.current = false
+        if (typeQueueRef.current.length > 0) {
+          processTypeQueue()
+        }
+      }
+    }, 20) // 20ms per character typing speed
   }, [editor])
+
+  const handleTranscript = React.useCallback((text: string) => {
+    if (!editor || !text.trim()) return
+    const isEmpty = editor.getText().trim().length === 0
+    const textToInsert = isEmpty ? text : ' ' + text
+    
+    typeQueueRef.current.push(textToInsert)
+    processTypeQueue()
+  }, [editor, processTypeQueue])
 
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
@@ -265,6 +291,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
               onTranscript={handleTranscript}
               onRecordingChange={setIsVoiceRecording}
               disabled={!isOnline}
+              modelName={sttModel}
             />
           )}
           {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (

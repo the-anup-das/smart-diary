@@ -32,7 +32,7 @@ services:
       # STT: remove or leave blank to disable voice feature entirely
       - STT_BASE_URL=http://stt-server:8000/v1
       - STT_API_KEY=not-needed
-      - STT_MODEL=Systran/faster-whisper-base.en
+      - STT_MODEL=${STT_MODEL:-Systran/faster-whisper-base.en}
     depends_on:
       - db
       - qdrant
@@ -54,8 +54,11 @@ services:
     container_name: diary-stt
     restart: always
     environment:
-      WHISPER__MODEL: "Systran/faster-whisper-base.en"
+      WHISPER__MODEL: "${STT_MODEL:-Systran/faster-whisper-base.en}"
       WHISPER__MODEL_LOAD_TTL: 1800  # unload from RAM after 30 min idle
+      WHISPER__VAD_FILTER: "True"    # auto-filter silence and hallucinations
+    ports:
+      - "8001:8000"
     volumes:
       - stt_models:/root/.cache/huggingface  # persist downloaded model weights
 
