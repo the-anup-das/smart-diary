@@ -10,6 +10,7 @@ import { MorningIntentions } from "./MorningIntentions"
 import { CheckCircle2, Trash, WifiOff } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
+import { VoiceRecorder } from "./VoiceRecorder"
 
 export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
   const isOnline = useNetworkStatus()
@@ -23,6 +24,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
+  const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
 
   React.useEffect(() => {
@@ -215,6 +217,15 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }
 
+  const handleTranscript = React.useCallback((text: string) => {
+    if (!editor) return
+    // Move cursor to the very end, then insert the transcribed text.
+    // A space is prepended unless the document is empty.
+    editor.commands.focus('end')
+    const isEmpty = editor.getText().trim().length === 0
+    editor.commands.insertContent(isEmpty ? text : ' ' + text)
+  }, [editor])
+
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
   return (
@@ -233,6 +244,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
               <Trash className="w-4 h-4" />
             </button>
           )}
+          {/* Voice recorder — always visible, self-contained */}
+          <VoiceRecorder
+            onTranscript={handleTranscript}
+            onRecordingChange={setIsVoiceRecording}
+            disabled={!isOnline}
+          />
           {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
             <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
               <span className="text-sm font-mono tracking-wide font-medium">
@@ -279,7 +296,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
            onClick={handleSaveAndReflect}
            disabled={!editor || isProcessing || wordCount < 3}
            suppressHydrationWarning
-           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ring-primary/20 bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
+           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ${
+             isVoiceRecording
+               ? 'ring-red-500/40 shadow-[0_8px_30px_rgba(239,68,68,0.35)]'
+               : 'ring-primary/20'
+           } bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
          >
            {isProcessing ? (
              <span className="flex items-center space-x-2 px-4">
