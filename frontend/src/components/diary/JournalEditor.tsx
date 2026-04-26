@@ -25,6 +25,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
+  const [sttEnabled, setSttEnabled] = React.useState(false)
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
 
   React.useEffect(() => {
@@ -33,6 +34,20 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       .then(data => {
         if (!data.detail && data.preferences) {
           setPreferences(data.preferences)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // Check if STT is configured and kick off a background model warm-up
+  React.useEffect(() => {
+    fetch("/api/voice/status")
+      .then(res => res.json())
+      .then(data => {
+        if (data.enabled) {
+          setSttEnabled(true)
+          // Fire-and-forget: pre-load the Whisper model while the user writes
+          fetch("/api/voice/warm", { method: "POST" }).catch(() => {})
         }
       })
       .catch(() => {})
@@ -244,12 +259,14 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
               <Trash className="w-4 h-4" />
             </button>
           )}
-          {/* Voice recorder — always visible, self-contained */}
-          <VoiceRecorder
-            onTranscript={handleTranscript}
-            onRecordingChange={setIsVoiceRecording}
-            disabled={!isOnline}
-          />
+          {/* Voice recorder — only shown when STT_BASE_URL is configured */}
+          {sttEnabled && (
+            <VoiceRecorder
+              onTranscript={handleTranscript}
+              onRecordingChange={setIsVoiceRecording}
+              disabled={!isOnline}
+            />
+          )}
           {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
             <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
               <span className="text-sm font-mono tracking-wide font-medium">

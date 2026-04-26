@@ -29,9 +29,14 @@ services:
       - DATABASE_URL=postgresql://diary_user:diary_password@db:5432/diary_db
       - JWT_SECRET=super-secret-diary-key-you-should-change
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # STT: remove or leave blank to disable voice feature entirely
+      - STT_BASE_URL=http://stt-server:8000/v1
+      - STT_API_KEY=not-needed
+      - STT_MODEL=Systran/faster-whisper-base.en
     depends_on:
       - db
       - qdrant
+      - stt-server
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -41,6 +46,18 @@ services:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  # Whisper STT server — OpenAI-compatible /v1/audio/transcriptions
+  # Remove STT_BASE_URL from backend env above to disable the voice feature
+  stt-server:
+    image: fedirz/faster-whisper-server:latest-cpu
+    container_name: diary-stt
+    restart: always
+    environment:
+      WHISPER__MODEL: "Systran/faster-whisper-base.en"
+      WHISPER__MODEL_LOAD_TTL: 1800  # unload from RAM after 30 min idle
+    volumes:
+      - stt_models:/root/.cache/huggingface  # persist downloaded model weights
 
   frontend:
     build:
@@ -64,3 +81,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  stt_models:
