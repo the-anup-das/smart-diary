@@ -153,6 +153,50 @@ This starts **PostgreSQL**, **Qdrant (Vector DB)**, **FastAPI**, and **Next.js**
 
 ---
 
+## 🦙 Using Local Open-Source Models (LM Studio / Ollama)
+
+You don't have to rely on OpenAI! Notebook is fully compatible with local, open-source language models. By using tools like **LM Studio** or **Ollama**, you can run powerful models directly from your laptop or NAS for free and with 100% privacy.
+
+To configure Notebook to use a local model via **LM Link** or LM Studio's Local Server:
+
+1. Follow this comprehensive guide to get started: [Stop Paying for ChatGPT: Run Powerful Language Models From Your Laptop](https://medium.anuptechtips.com/stop-paying-for-chatgpt-run-powerful-language-models-from-your-laptop-9811219e0a63)
+2. In your `.env` file, update the following variables:
+
+```env
+# Point this to your LM Link URL or Local Network IP
+OPENAI_BASE_URL="http://your-local-ip:1234/v1" # or https://your-link.lmstudio.pro/v1
+OPENAI_API_KEY="lm-studio" # Not strictly checked, but cannot be empty
+
+# Update these to match the EXACT names of the models loaded in your local server
+CHAT_MODEL="llama-3.2-3b-instruct"
+EMBEDDING_MODEL="nomic-embed-text-v1.5"
+```
+
+---
+
+## 💾 Data Persistence & Backup
+
+### NAS Deployment (OpenMediaVault/Synology/QNAP)
+To ensure your data survives container updates or system restarts, always use **Docker Volumes** or **Bind Mounts**. 
+
+> [!NOTE]
+> A pre-configured OMV setup is available in the `deployment/omv` directory.
+
+**Recommended Bind Mount for NAS:**
+In your `docker-compose.yml`, map the Postgres data to a physical folder on your drive:
+```yaml
+db:
+  volumes:
+    - /path/to/your/nas/storage/db_data:/var/lib/postgresql/data
+```
+
+### Import & Export
+Notebook provides a built-in JSON archive system located in **Settings > Data & Security**:
+- **Export:** Downloads a complete JSON file containing all your entries, AI feedback, and open loops.
+- **Import:** Allows you to restore your library from a JSON archive. This is useful for moving to a new server or recovering from a data loss. *Note: Importing will merge data with your current entries.*
+
+---
+
 ## 📁 Project Structure
 - `backend/skills/decision_agent.py`: The LangGraph Swarm engine.
 - `backend/services/memory_service.py`: Mem0 and Qdrant integration.

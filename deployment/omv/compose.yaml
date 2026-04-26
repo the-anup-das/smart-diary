@@ -10,6 +10,7 @@ services:
     environment:
       - INTERNAL_BACKEND_URL=http://backend:8000
       - NEXT_PUBLIC_API_URL=${EXTERNAL_URL:-http://localhost}:8000
+      - JWT_SECRET=${JWT_SECRET}
     depends_on:
       - backend
 
@@ -27,11 +28,16 @@ services:
       - MEM0_DIR=/data/mem0
       - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - JWT_SECRET=${JWT_SECRET}
     volumes:
       - /AppData/notebook/backend_data:/data
     depends_on:
-      - db
-      - qdrant
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
 
   db:
     image: postgres:15-alpine
@@ -45,6 +51,11 @@ services:
       - POSTGRES_DB=${DB_NAME:-diary_db}
     volumes:
       - /AppData/notebook/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   qdrant:
     image: qdrant/qdrant:latest

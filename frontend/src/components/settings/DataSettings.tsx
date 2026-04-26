@@ -2,16 +2,18 @@
 import * as React from "react"
 import { Button } from "@/components/ui/Button"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card"
-import { Download, AlertTriangle } from "lucide-react"
+import { Download, AlertTriangle, Upload } from "lucide-react"
 import { ToggleSwitch } from "@/components/ui/ToggleSwitch"
 
 export function DataSettings() {
   const [exporting, setExporting] = React.useState(false)
+  const [importing, setImporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [prefs, setPrefs] = React.useState<any>(null)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [saveMessage, setSaveMessage] = React.useState("")
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -65,6 +67,35 @@ export function DataSettings() {
     setExporting(false)
   }
 
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setImporting(true)
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      
+      const res = await fetch("/api/users/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+      })
+      
+      if (res.ok) {
+        const result = await res.json()
+        alert(`Successfully imported ${result.entries_imported} entries and ${result.loops_imported} open loops!`)
+        window.location.reload()
+      } else {
+        alert("Failed to import data. Please check the file format.")
+      }
+    } catch (e) {
+      alert("Error reading file: " + (e as Error).message)
+    }
+    setImporting(false)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }
+
   const handleDelete = async () => {
     const confirmed = window.confirm("Are you SURE you want to permanently delete your account and all entries? This action cannot be undone.")
     if (!confirmed) return
@@ -101,6 +132,31 @@ export function DataSettings() {
           <Button onClick={handleExport} disabled={exporting} className="flex items-center">
             <Download className="w-4 h-4 mr-2" />
             {exporting ? "Exporting..." : "Download JSON Archive"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-panel">
+        <CardHeader>
+          <CardTitle className="text-xl">Import Library</CardTitle>
+          <p className="text-sm text-gray-500">Restore your journal from a previously exported JSON archive. This will merge with your current data.</p>
+        </CardHeader>
+        <CardContent>
+          <input 
+            type="file" 
+            accept=".json" 
+            className="hidden" 
+            ref={fileInputRef} 
+            onChange={handleImport}
+          />
+          <Button 
+            onClick={() => fileInputRef.current?.click()} 
+            disabled={importing} 
+            className="flex items-center"
+            variant="outline"
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            {importing ? "Importing..." : "Restore from JSON Backup"}
           </Button>
         </CardContent>
       </Card>

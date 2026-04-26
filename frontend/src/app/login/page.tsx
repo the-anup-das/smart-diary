@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card"
 export default function LoginPage() {
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
+  const [name, setName] = React.useState("")
   const [isRegistering, setIsRegistering] = React.useState(false)
   const [error, setError] = React.useState("")
   const router = useRouter()
@@ -28,10 +29,14 @@ export default function LoginPage() {
     }
     
     const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login'
+    const body = isRegistering 
+      ? { email, password, name } 
+      : { email, password }
+
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name: "Test User" }),
+      body: JSON.stringify(body),
     })
     
     if (res.ok) {
@@ -57,6 +62,15 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-5">
+            {isRegistering && (
+              <Input 
+                type="text" 
+                placeholder="Full Name" 
+                value={name} 
+                onChange={e => setName(e.target.value)} 
+                required 
+              />
+            )}
             <Input 
               type="email" 
               placeholder="Email address" 
