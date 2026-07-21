@@ -122,7 +122,7 @@ export function TemplatePicker({ onInsert }: { onInsert: (html: string) => void 
             aria-label="Close templates"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-0 top-full mt-2 z-50 w-80 max-w-[85vw] rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 fade-in" role="menu">
+          <div className="absolute right-0 top-full mt-2 z-50 w-96 max-w-[88vw] rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 fade-in" role="menu">
             <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400">
               Guided templates
             </p>

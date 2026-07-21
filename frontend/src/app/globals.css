@@ -50,9 +50,11 @@ body {
   box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
 }
 
-/* Used across the app; was previously referenced but never defined */
+/* Used across the app; was previously referenced but never defined.
+   No fill-mode: a persistently-filled opacity animation would keep a stacking
+   context on the element forever, trapping dropdowns below later content. */
 .fade-in {
-  animation: fade-in 0.4s ease-out both;
+  animation: fade-in 0.4s ease-out;
 }
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }

@@ -329,7 +329,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       ? "fixed inset-0 z-[100] bg-background flex flex-col pt-6 px-4 lg:px-0 overflow-hidden"
       : "flex flex-col h-full w-full pt-6"
     }>
-      <div className={`flex justify-between items-center px-2 lg:px-6 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
+      <div className={`flex justify-between items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">
             {(entryDate ? new Date(entryDate + 'T00:00:00') : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
