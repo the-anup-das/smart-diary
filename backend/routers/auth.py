@@ -46,7 +46,9 @@ def verify_session(session: str = Cookie(None)):
     try:
         payload = jwt.decode(session, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("userId")
-        if user_id is None:
+        # Single-purpose tokens (e.g. password reset) are signed with the same
+        # key but must never be accepted as a login session.
+        if user_id is None or payload.get("purpose") is not None:
             raise HTTPException(status_code=401, detail="Unauthorized")
         return user_id
     except JWTError:

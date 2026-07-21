@@ -31,7 +31,6 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [sttModel, setSttModel] = React.useState<string>("")
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
   const typeQueueRef = React.useRef<string[]>([])
-  const isTypingRef = React.useRef(false)
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -238,26 +237,17 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   }
 
   const processTypeQueue = React.useCallback(() => {
-    if (isTypingRef.current || typeQueueRef.current.length === 0 || !editor) return
-    isTypingRef.current = true
-
-    const textToType = typeQueueRef.current.shift() || ""
-    const chars = textToType.split("")
-    let i = 0
-
-    const interval = setInterval(() => {
-      editor.commands.focus('end')
-      editor.commands.insertContent(chars[i])
-      i++
-      
-      if (i >= chars.length) {
-        clearInterval(interval)
-        isTypingRef.current = false
-        if (typeQueueRef.current.length > 0) {
-          processTypeQueue()
-        }
-      }
-    }, 20) // 20ms per character typing speed
+    if (typeQueueRef.current.length === 0 || !editor) return
+    // Insert the whole chunk in one call: char-by-char insertContent drops
+    // whitespace-only strings (TipTap parses them as HTML), which glued
+    // dictated words together. Appending at the document end (instead of
+    // focus('end') + insert) also leaves the caret alone if the user is
+    // typing elsewhere mid-transcription.
+    const text = typeQueueRef.current.splice(0).join("")
+    const literal = text.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    editor.commands.insertContentAt(editor.state.doc.content.size, literal, {
+      parseOptions: { preserveWhitespace: 'full' },
+    })
   }, [editor])
 
   const handleTranscript = React.useCallback((text: string) => {

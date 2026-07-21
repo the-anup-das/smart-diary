@@ -12,18 +12,37 @@ from fastapi import HTTPException, Request
 
 # Allow operators to disable limits entirely (e.g. behind an authenticating proxy)
 RATE_LIMIT_DISABLED = os.getenv("RATE_LIMIT_DISABLED", "false").lower() == "true"
+# X-Forwarded-For is client-controlled unless a trusted proxy sets it, so an
+# attacker could mint a fresh rate-limit bucket per request. Only honor it when
+# the operator explicitly says their proxy appends the real client address.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+
+_MAX_TRACKED_KEYS = 1024
 
 _lock = threading.Lock()
 _hits: dict[str, deque] = defaultdict(deque)
+_windows: dict[str, int] = {}
 
 
 def _client_ip(request: Request) -> str:
-    # The Next.js rewrite proxy sits in front of the backend, so the direct
-    # peer address is usually the proxy. Prefer the first hop it forwards.
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            # Rightmost hop was appended by our own proxy; earlier entries are
+            # whatever the client claimed.
+            return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _sweep_locked(now: float) -> None:
+    # Bound memory: drop keys whose newest hit is outside their window.
+    if len(_hits) <= _MAX_TRACKED_KEYS:
+        return
+    for key in list(_hits):
+        window = _hits[key]
+        if not window or window[-1] <= now - _windows.get(key, 3600):
+            _hits.pop(key, None)
+            _windows.pop(key, None)
 
 
 def rate_limit(scope: str, max_requests: int, window_seconds: int):
@@ -38,6 +57,8 @@ def rate_limit(scope: str, max_requests: int, window_seconds: int):
         key = f"{scope}:{_client_ip(request)}"
         now = time.monotonic()
         with _lock:
+            _sweep_locked(now)
+            _windows[key] = window_seconds
             window = _hits[key]
             while window and window[0] <= now - window_seconds:
                 window.popleft()

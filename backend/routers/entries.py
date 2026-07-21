@@ -181,11 +181,20 @@ def search_entries(
     )
     q = (q or "").strip()
     if q:
-        query = query.filter(models.JournalEntry.content.ilike(f"%{q}%"))
+        # Escape LIKE wildcards so "100%" or "_" match literally instead of everything.
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(models.JournalEntry.content.ilike(f"%{escaped}%", escape="\\"))
+
+    def _parse_date(value: str, label: str) -> datetime:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"{label} must be a YYYY-MM-DD date.")
+
     if date_from:
-        query = query.filter(models.JournalEntry.date >= datetime.strptime(date_from, "%Y-%m-%d"))
+        query = query.filter(models.JournalEntry.date >= _parse_date(date_from, "date_from"))
     if date_to:
-        query = query.filter(models.JournalEntry.date <= datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
+        query = query.filter(models.JournalEntry.date <= _parse_date(date_to, "date_to").replace(hour=23, minute=59, second=59))
 
     entries = query.order_by(models.JournalEntry.date.desc()).limit(500).all()
 
