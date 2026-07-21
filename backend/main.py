@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 import models
 
+import os
 import time
 from sqlalchemy.exc import OperationalError
 
@@ -17,10 +18,16 @@ for _ in range(15):
 
 app = FastAPI(title="AI Diary Core API", version="1.0")
 
-# Allow Next.js frontend to securely hit the API natively via CORS
+# Allow Next.js frontend to securely hit the API natively via CORS.
+# Override for production deployments via CORS_ORIGINS (comma-separated list).
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

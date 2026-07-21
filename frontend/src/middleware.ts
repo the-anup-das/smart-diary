@@ -3,9 +3,10 @@ import type { NextRequest } from 'next/server'
 import { decrypt } from './lib/auth'
 
 export async function middleware(request: NextRequest) {
-  const isPublicRoute = request.nextUrl.pathname.startsWith('/api/') || 
+  const isPublicRoute = request.nextUrl.pathname.startsWith('/api/') ||
                         request.nextUrl.pathname === '/login' ||
-                        request.nextUrl.pathname === '/register';
+                        request.nextUrl.pathname === '/register' ||
+                        request.nextUrl.pathname === '/reset-password';
 
   const sessionCookie = request.cookies.get("session")?.value;
   let isAuthenticated = false;

@@ -160,6 +160,112 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
         }
     }
 
+@router.get("/api/entries/search")
+def search_entries(
+    q: str = "",
+    mood_min: int = None,
+    mood_max: int = None,
+    sentiment: str = None,
+    topic: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """Full-text search over entries with optional mood/sentiment/topic/date filters."""
+    import re
+
+    query = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
+    )
+    q = (q or "").strip()
+    if q:
+        query = query.filter(models.JournalEntry.content.ilike(f"%{q}%"))
+    if date_from:
+        query = query.filter(models.JournalEntry.date >= datetime.strptime(date_from, "%Y-%m-%d"))
+    if date_to:
+        query = query.filter(models.JournalEntry.date <= datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59))
+
+    entries = query.order_by(models.JournalEntry.date.desc()).limit(500).all()
+
+    # Feedback-based filters run in Python: per-user entry counts are tiny (one
+    # entry a day), and the topics column is generic JSON we can't index into portably.
+    results = []
+    for entry in entries:
+        fb = entry.feedback
+        if mood_min is not None and (not fb or fb.mood_score is None or fb.mood_score < mood_min):
+            continue
+        if mood_max is not None and (not fb or fb.mood_score is None or fb.mood_score > mood_max):
+            continue
+        if sentiment and (not fb or fb.sentiment != sentiment):
+            continue
+        if topic and (not fb or not fb.topics or topic not in fb.topics):
+            continue
+
+        raw = re.sub(r"<[^>]*>?", "", entry.content or "")
+        # Build a snippet centred on the first match so users see the hit in context
+        snippet = raw[:200].strip()
+        if q:
+            pos = raw.lower().find(q.lower())
+            if pos >= 0:
+                start = max(0, pos - 90)
+                end = min(len(raw), pos + len(q) + 90)
+                snippet = ("…" if start > 0 else "") + raw[start:end].strip() + ("…" if end < len(raw) else "")
+
+        results.append({
+            "id": entry.id,
+            "date": entry.date.strftime("%Y-%m-%d"),
+            "displayDate": entry.date.strftime("%B %d, %Y"),
+            "snippet": snippet,
+            "content": entry.content,
+            "moodScore": fb.mood_score if fb else None,
+            "sentiment": fb.sentiment if fb else None,
+            "topics": fb.topics if fb else None,
+        })
+        if len(results) >= 50:
+            break
+
+    return {"results": results, "total": len(results)}
+
+@router.get("/api/entries/on-this-day")
+def get_on_this_day(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Resurface entries written exactly 1 week / 1 month / 6 months / 1 year ago."""
+    import re
+    today = datetime.utcnow().date()
+    lookbacks = [
+        ("1 week ago", today - timedelta(days=7)),
+        ("1 month ago", today - timedelta(days=30)),
+        ("6 months ago", today - timedelta(days=182)),
+        ("1 year ago", today - timedelta(days=365)),
+    ]
+
+    memories = []
+    for label, target in lookbacks:
+        day_start = datetime(target.year, target.month, target.day)
+        day_end = day_start + timedelta(days=1)
+        entry = (
+            db.query(models.JournalEntry)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date >= day_start,
+                models.JournalEntry.date < day_end,
+            )
+            .first()
+        )
+        if entry:
+            raw = re.sub(r"<[^>]*>?", "", entry.content or "")
+            memories.append({
+                "id": entry.id,
+                "label": label,
+                "date": entry.date.strftime("%B %d, %Y"),
+                "preview": raw[:280].strip() + ("…" if len(raw) > 280 else ""),
+                "moodScore": entry.feedback.mood_score if entry.feedback else None,
+            })
+
+    return {"memories": memories}
+
 @router.delete("/api/entries/{id}")
 def soft_delete_entry(id: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
     entry = db.query(models.JournalEntry).filter(models.JournalEntry.id == id, models.JournalEntry.user_id == user_id).first()

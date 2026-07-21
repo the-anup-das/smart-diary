@@ -7,9 +7,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { action } = await params;
     const body = await request.text();
 
+    // Pass the original client IP along so backend rate limiting is per-user,
+    // not per-proxy.
+    const forwardedFor = request.headers.get('x-forwarded-for') || '';
+
     const res = await fetch(`${BACKEND_URL}/api/auth/${action}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(forwardedFor ? { 'x-forwarded-for': forwardedFor } : {}),
+      },
       body,
       cache: 'no-store',
     });
