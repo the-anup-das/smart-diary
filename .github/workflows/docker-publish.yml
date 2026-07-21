@@ -91,7 +91,11 @@ jobs:
           images: |
             ghcr.io/${{ github.repository_owner }}/smart-diary-${{ matrix.component }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Releases should update :latest too — a NAS pulling :latest is the
+            # primary consumer. Also tag with the literal git tag (works for
+            # non-semver versions like v0.1.1.2, which type=semver skips).
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=tag
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
