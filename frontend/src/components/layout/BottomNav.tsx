@@ -41,7 +41,7 @@ export function BottomNav() {
       )}
 
       {moreOpen && (
-        <div className="fixed bottom-[72px] right-3 z-50 md:hidden rounded-2xl border border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl p-2 w-48 fade-in" role="menu">
+        <div className="fixed bottom-[72px] right-3 z-50 md:hidden rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 w-48 fade-in" role="menu">
           {MORE_ITEMS.map(item => {
             const Icon = item.icon
             const isActive = pathname.startsWith(item.href)
@@ -65,7 +65,7 @@ export function BottomNav() {
 
       <nav
         aria-label="Primary"
-        className="fixed bottom-0 inset-x-0 z-50 md:hidden border-t border-black/10 dark:border-white/10 bg-background/85 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]"
+        className="fixed bottom-0 inset-x-0 z-50 md:hidden border-t border-black/10 dark:border-white/10 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]"
       >
         <div className="grid grid-cols-5">
           {TABS.map(tab => {

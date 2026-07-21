@@ -122,7 +122,7 @@ export function TemplatePicker({ onInsert }: { onInsert: (html: string) => void 
             aria-label="Close templates"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-0 top-full mt-2 z-50 w-80 max-w-[85vw] rounded-2xl border border-black/10 dark:border-white/10 bg-background/95 backdrop-blur-xl shadow-2xl p-2 fade-in" role="menu">
+          <div className="absolute right-0 top-full mt-2 z-50 w-80 max-w-[85vw] rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 fade-in" role="menu">
             <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400">
               Guided templates
             </p>
@@ -137,9 +137,9 @@ export function TemplatePicker({ onInsert }: { onInsert: (html: string) => void 
                     className="w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
                   >
                     <Icon className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span className="min-w-0">
-                      <span className="flex items-baseline gap-2">
-                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{t.name}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{t.name}</span>
                         <span className="text-[10px] text-gray-400 uppercase tracking-wide flex-shrink-0">{t.tradition}</span>
                       </span>
                       <span className="block text-xs text-gray-500 truncate">{t.tagline}</span>
