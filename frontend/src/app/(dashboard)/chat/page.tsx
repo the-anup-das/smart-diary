@@ -1,5 +1,6 @@
 "use client"
 import * as React from "react"
+import Link from "next/link"
 import { MessageCircle, Send, Sparkles, CalendarDays } from "lucide-react"
 
 interface Source {
@@ -127,13 +128,15 @@ export default function ChatPage() {
                   </span>
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
                     {m.sources.map(s => (
-                      <span
+                      <Link
                         key={s.id}
+                        href={`/history?date=${s.date}`}
                         title={s.snippet}
-                        className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[11px] font-medium border border-primary/20"
+                        aria-label={`Open the entry from ${s.displayDate} in History`}
+                        className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[11px] font-medium border border-primary/20 hover:bg-primary/20 hover:border-primary/40 transition-colors"
                       >
                         {s.displayDate}
-                      </span>
+                      </Link>
                     ))}
                   </div>
                 </div>

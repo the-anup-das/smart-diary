@@ -15,21 +15,64 @@ export function Sidebar() {
     setMounted(true)
   }, [])
 
-  const navItems = [
-    { name: "Today", href: "/", icon: PenSquare },
-    { name: "History", href: "/history", icon: Calendar },
-    { name: "Chat", href: "/chat", icon: MessageCircle },
-    { name: "Energy", href: "/energy", icon: BatteryCharging },
-    { name: "Insights", href: "/insights", icon: BarChart2 },
-    { name: "Targets", href: "/targets", icon: Target },
-    { name: "Decisions", href: "/decisions", icon: GitMerge },
-    { name: "Settings", href: "/settings", icon: Settings },
+  const navSections = [
+    {
+      label: "Write",
+      items: [
+        { name: "Today", href: "/", icon: PenSquare },
+        { name: "History", href: "/history", icon: Calendar },
+      ],
+    },
+    {
+      label: "Reflect",
+      items: [
+        { name: "Insights", href: "/insights", icon: BarChart2 },
+        { name: "Energy", href: "/energy", icon: BatteryCharging },
+        { name: "Chat", href: "/chat", icon: MessageCircle },
+      ],
+    },
+    {
+      label: "Decide",
+      items: [
+        { name: "Decisions", href: "/decisions", icon: GitMerge },
+        { name: "Targets", href: "/targets", icon: Target },
+      ],
+    },
   ]
+  const settingsItem = { name: "Settings", href: "/settings", icon: Settings }
 
   const [isCollapsed, setIsCollapsed] = React.useState(false)
 
+  const renderNavLink = (item: { name: string; href: string; icon: React.ComponentType<{ className?: string }> }) => {
+    const isActive = pathname === item.href
+    const Icon = item.icon
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        title={isCollapsed ? item.name : undefined}
+        className={cn(
+          "flex items-center py-3 rounded-lg text-sm font-medium transition-all group relative overflow-hidden",
+          isCollapsed ? "justify-center px-0 mx-2" : "px-4 mx-0",
+          isActive
+            ? "bg-primary/10 text-primary shadow-inner disabled:pointer-events-none"
+            : "text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100"
+        )}
+      >
+        <Icon
+          className={cn(
+            "transition-colors flex-shrink-0",
+            isCollapsed ? "w-6 h-6" : "w-5 h-5 mr-3",
+            isActive ? "text-primary" : "text-gray-500 group-hover:text-gray-300"
+          )}
+        />
+        {!isCollapsed && <span className="whitespace-nowrap fade-in">{item.name}</span>}
+      </Link>
+    )
+  }
+
   return (
-    <aside className={cn("border-r border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] backdrop-blur-xl flex flex-col flex-shrink-0 transition-all duration-300 ease-in-out relative z-50 pt-4", isCollapsed ? "w-20" : "w-[260px]")}>
+    <aside className={cn("border-r border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] backdrop-blur-xl hidden md:flex flex-col flex-shrink-0 transition-all duration-300 ease-in-out relative z-50 pt-4", isCollapsed ? "w-20" : "w-[260px]")}>
       {/* Brand Header */}
       <div className={cn("h-20 flex items-center border-b border-black/5 dark:border-white/5 transition-all overflow-hidden", isCollapsed ? "justify-center px-0 flex-col py-4" : "justify-between px-6")}>
         <div className="flex items-center">
@@ -50,34 +93,29 @@ export function Sidebar() {
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 py-8 px-4 space-y-2">
-        {navItems.map((item) => {
-          const isActive = pathname === item.href
-          const Icon = item.icon
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              title={isCollapsed ? item.name : undefined}
-              className={cn(
-                "flex items-center py-3.5 rounded-lg text-sm font-medium transition-all group relative overflow-hidden",
-                isCollapsed ? "justify-center px-0 mx-2" : "px-4 mx-0",
-                isActive 
-                  ? "bg-primary/10 text-primary shadow-inner disabled:pointer-events-none" 
-                  : "text-gray-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100"
-              )}
-            >
-              <Icon 
-                className={cn(
-                  "transition-colors flex-shrink-0",
-                  isCollapsed ? "w-6 h-6" : "w-5 h-5 mr-3", 
-                  isActive ? "text-primary" : "text-gray-500 group-hover:text-gray-300"
-                )} 
-              />
-              {!isCollapsed && <span className="whitespace-nowrap fade-in">{item.name}</span>}
-            </Link>
-          )
-        })}
+      <nav className="flex-1 py-6 px-4 overflow-y-auto">
+        {navSections.map((section, sectionIndex) => (
+          <div key={section.label} className={sectionIndex > 0 ? "mt-5" : ""}>
+            {isCollapsed ? (
+              sectionIndex > 0 && <div className="mx-3 mb-3 border-t border-black/5 dark:border-white/5" />
+            ) : (
+              <p className="px-4 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400 dark:text-gray-500 select-none">
+                {section.label}
+              </p>
+            )}
+            <div className="space-y-1">
+              {section.items.map(item => renderNavLink(item))}
+            </div>
+          </div>
+        ))}
+        <div className="mt-5">
+          {isCollapsed ? (
+            <div className="mx-3 mb-3 border-t border-black/5 dark:border-white/5" />
+          ) : (
+            <div className="mx-4 mb-2 border-t border-black/5 dark:border-white/5" />
+          )}
+          {renderNavLink(settingsItem)}
+        </div>
       </nav>
 
       {/* Bottom Actions */}

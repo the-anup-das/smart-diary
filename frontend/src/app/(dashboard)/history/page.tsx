@@ -145,6 +145,25 @@ export default function HistoryPage() {
     }, 100)
   }
 
+  // Deep link: /history?date=YYYY-MM-DD (e.g. from chat citation pills) jumps
+  // to that month and expands the entry. window.location avoids the Suspense
+  // boundary useSearchParams requires.
+  const deepLinkHandled = React.useRef(false)
+  React.useEffect(() => {
+    if (deepLinkHandled.current || entries.length === 0) return
+    deepLinkHandled.current = true
+    const date = new URLSearchParams(window.location.search).get('date')
+    const entry = date ? entryMap.get(date) : undefined
+    if (!date || !entry) return
+    const d = new Date(date + 'T00:00:00')
+    setViewMode("month")
+    setCurrentMonth({ year: d.getFullYear(), month: d.getMonth() })
+    setExpandedId(entry.id)
+    setTimeout(() => {
+      entryRefs.current.get(entry.id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 300)
+  }, [entries, entryMap])
+
   const viewModes: { key: ViewMode; label: string }[] = [
     { key: "month", label: "Month" },
     { key: "year", label: "Year" },

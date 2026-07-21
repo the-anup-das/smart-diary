@@ -9,10 +9,18 @@ import { EchoesWidget } from "./EchoesWidget"
 import { MorningIntentions } from "./MorningIntentions"
 import { OnThisDay } from "./OnThisDay"
 import { DecisionNudge } from "./DecisionNudge"
-import { CheckCircle2, Trash, WifiOff } from "lucide-react"
+import { CheckCircle2, Trash, WifiOff, Maximize2, Minimize2 } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
 import { VoiceRecorder } from "./VoiceRecorder"
+import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
+
+const REFLECTING_MESSAGES = [
+  "Reading your day…",
+  "Noticing patterns…",
+  "Measuring your energy…",
+  "Writing your reflection…",
+]
 
 export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
   const isOnline = useNetworkStatus()
@@ -27,6 +35,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
+  const [zenMode, setZenMode] = React.useState(false)
   const [sttEnabled, setSttEnabled] = React.useState(false)
   const [sttModel, setSttModel] = React.useState<string>("")
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
@@ -228,6 +237,16 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }, [])
 
+  // Escape exits focus mode
+  React.useEffect(() => {
+    if (!zenMode) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZenMode(false)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [zenMode])
+
   const handleSelectIntention = (prompt: string) => {
     if (editor) {
       editor.commands.focus('end');
@@ -262,8 +281,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
   return (
-    <div className="flex flex-col h-full w-full pt-6">
-      <div className="flex justify-between items-center mb-10 px-2 lg:px-6">
+    <div className={zenMode
+      ? "fixed inset-0 z-[100] bg-background flex flex-col pt-6 px-4 lg:px-0 overflow-hidden"
+      : "flex flex-col h-full w-full pt-6"
+    }>
+      <div className={`flex justify-between items-center px-2 lg:px-6 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
         <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100">
           {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         </h1>
@@ -278,6 +300,15 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
               <Trash className="w-4 h-4" />
             </button>
           )}
+          <button
+            onClick={() => setZenMode(z => !z)}
+            className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
+            title={zenMode ? "Exit focus mode (Esc)" : "Focus mode — hide everything but your writing"}
+            aria-label={zenMode ? "Exit focus mode" : "Enter focus mode"}
+            aria-pressed={zenMode}
+          >
+            {zenMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
           {/* Voice recorder — only shown when STT_BASE_URL is configured */}
           {sttEnabled && (
             <VoiceRecorder
@@ -315,15 +346,19 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </div>
       </div>
       
-      <DecisionNudge />
+      {!zenMode && (
+        <>
+          <DecisionNudge />
 
-      <OnThisDay />
+          <OnThisDay />
 
-      <EchoesWidget />
+          <EchoesWidget />
 
-      <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
-      
-      <div className="flex-1 relative overflow-hidden group">
+          <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
+        </>
+      )}
+
+      <div className={`flex-1 relative overflow-hidden group ${zenMode ? "max-w-3xl mx-auto w-full min-h-0" : ""}`}>
         <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 pt-4 pb-[300px] custom-scrollbar overflow-y-auto scroll-smooth scroll-pb-[200px]`}>
           <EditorContent editor={editor} />
         </div>
@@ -332,7 +367,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       </div>
 
       {/* Save & Reflect FAB */}
-      <div className="absolute bottom-8 right-6 lg:right-10 z-50" suppressHydrationWarning>
+      <div className={`absolute ${zenMode ? "bottom-8" : "bottom-24 md:bottom-8"} right-6 lg:right-10 z-50`} suppressHydrationWarning>
          <button 
            onClick={handleSaveAndReflect}
            disabled={!editor || isProcessing || wordCount < 3}
@@ -344,10 +379,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
            } bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
          >
            {isProcessing ? (
-             <span className="flex items-center space-x-2 px-4">
-               <span className="animate-spin text-xl">⏳</span>
-               <span className="font-bold text-sm tracking-wide whitespace-nowrap">{processStage}</span>
-             </span>
+             <ReflectingIndicator
+               compact
+               messages={processStage === "Saving entry..." ? ["Saving your words…"] : REFLECTING_MESSAGES}
+               className="px-4 font-bold text-sm tracking-wide"
+             />
            ) : (
              <>
                <CheckCircle2 className="w-6 h-6 flex-shrink-0 group-hover:scale-110 transition-transform drop-shadow-md" />

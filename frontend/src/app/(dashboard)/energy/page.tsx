@@ -64,10 +64,19 @@ export default function EnergyPage() {
 
   if (loading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <BatteryCharging className="w-12 h-12 text-primary animate-pulse" />
-          <p className="text-gray-500 font-medium">Calibrating your energy...</p>
+      <div className="max-w-4xl mx-auto space-y-8 pb-20 animate-pulse" aria-busy="true" aria-label="Loading energy dashboard">
+        <header className="mb-8 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-black/5 dark:bg-white/5" />
+            <div className="h-8 w-64 rounded-lg bg-black/5 dark:bg-white/5" />
+          </div>
+          <div className="h-5 w-96 max-w-full rounded bg-black/5 dark:bg-white/5" />
+        </header>
+        <div className="space-y-6">
+          <div className="h-64 rounded-2xl bg-black/5 dark:bg-white/5" />
+          <div className="h-40 rounded-2xl bg-black/5 dark:bg-white/5" />
+          <div className="h-48 rounded-2xl bg-black/5 dark:bg-white/5" />
+          <div className="h-40 rounded-2xl bg-black/5 dark:bg-white/5" />
         </div>
       </div>
     )
