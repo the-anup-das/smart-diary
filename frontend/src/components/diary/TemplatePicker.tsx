@@ -71,8 +71,8 @@ const TEMPLATES: Template[] = [
     icon: NotebookPen,
     html:
       "<h2>Five-minute journal</h2>" +
-      "<p><strong>I'm grateful for…</strong></p><ul><li></li><li></li><li></li></ul>" +
-      "<p><strong>What would make today great?</strong></p><ul><li></li><li></li><li></li></ul>" +
+      "<p><strong>I'm grateful for…</strong></p><ul><li><p></p></li><li><p></p></li><li><p></p></li></ul>" +
+      "<p><strong>What would make today great?</strong></p><ul><li><p></p></li><li><p></p></li><li><p></p></li></ul>" +
       "<p><strong>Daily affirmation:</strong> I am…</p>",
   },
   {
@@ -84,7 +84,7 @@ const TEMPLATES: Template[] = [
     html:
       "<h2>Worry dump</h2>" +
       "<p><em>List every worry circling in your head. Then mark each one: can I control it?</em></p>" +
-      "<ul><li>Worry: … — <strong>In my control?</strong> yes/no — <strong>Next tiny step:</strong> …</li><li></li><li></li></ul>",
+      "<ul><li><p>Worry: … — <strong>In my control?</strong> yes/no — <strong>Next tiny step:</strong> …</p></li><li><p></p></li><li><p></p></li></ul>",
   },
   {
     key: "self-compassion",
