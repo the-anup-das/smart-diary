@@ -1,14 +1,24 @@
 import { JournalEditor } from "@/components/diary/JournalEditor"
+import { Onboarding } from "@/components/Onboarding"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>
+}) {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get('session');
-  
+
   if (!sessionCookie || !sessionCookie.value) {
     redirect('/login');
   }
+
+  // Backfill mode: /?date=YYYY-MM-DD edits a past day instead of today
+  const { date } = await searchParams;
+  const utcToday = new Date().toISOString().slice(0, 10);
+  const isBackdate = !!date && /^\d{4}-\d{2}-\d{2}$/.test(date) && date < utcToday;
 
   let initialContent = "";
   let initialId: string | null = null;
@@ -18,7 +28,8 @@ export default async function HomePage() {
   try {
     // Next.js explicitly caches NEXT_PUBLIC vars locally. We must use an explicit INTERNAL variable to safely traverse Docker's DNS loops.
     const BACKEND_URL = process.env.INTERNAL_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-    const res = await fetch(`${BACKEND_URL}/api/entries/today`, {
+    const endpoint = isBackdate ? `/api/entries/by-date?date=${date}` : `/api/entries/today`;
+    const res = await fetch(`${BACKEND_URL}${endpoint}`, {
       method: "GET",
       headers: { Cookie: `session=${sessionCookie.value}` },
       cache: 'no-store'
@@ -56,8 +67,15 @@ export default async function HomePage() {
 
   return (
     <div className="h-full w-full max-w-5xl mx-auto flex justify-center fade-in">
-      {/* We pass the SSR fetched draft right back into Tiptap's payload */}
-      <JournalEditor initialContent={initialContent} initialId={initialId} />
+      {/* We pass the SSR fetched draft right back into Tiptap's payload.
+          key remounts the editor when switching between days. */}
+      <JournalEditor
+        key={isBackdate ? date : "today"}
+        initialContent={initialContent}
+        initialId={initialId}
+        entryDate={isBackdate ? date! : null}
+      />
+      <Onboarding />
     </div>
   )
 }

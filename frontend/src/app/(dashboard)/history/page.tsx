@@ -1,5 +1,6 @@
 "use client"
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, BookOpen, FileText, Trash2, AlertTriangle, X, Search } from "lucide-react"
 import { SENTIMENT_STYLES } from "@/lib/mood"
 import { DeleteConfirmationModal } from "@/components/diary/DeleteConfirmationModal"
@@ -26,6 +27,7 @@ interface EntryData {
 type ViewMode = "month" | "year"
 
 export default function HistoryPage() {
+  const router = useRouter()
   const [entries, setEntries] = React.useState<EntryData[]>([])
   const [loading, setLoading] = React.useState(true)
   const [expandedId, setExpandedId] = React.useState<string | null>(null)
@@ -137,7 +139,13 @@ export default function HistoryPage() {
 
   const handleDayClick = (date: string) => {
     const entry = entryMap.get(date)
-    if (!entry) return
+    if (!entry) {
+      // Empty past day → open the editor in backfill mode for that date
+      const todayStr = new Date().toISOString().slice(0, 10)
+      if (date < todayStr) router.push(`/?date=${date}`)
+      else if (date === todayStr) router.push('/')
+      return
+    }
     setExpandedId(entry.id)
     setTimeout(() => {
       const el = entryRefs.current.get(entry.id)

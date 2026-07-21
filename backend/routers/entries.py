@@ -10,45 +10,73 @@ router = APIRouter()
 
 class EntryUpdate(BaseModel):
     content: str
+    date: str | None = None  # YYYY-MM-DD; omitted = today. Past dates allowed (backfill).
+
+
+def _parse_entry_date(value: str) -> datetime:
+    """Validate a backdate: well-formed and not in the future (UTC days)."""
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="date must be a YYYY-MM-DD date.")
+    if parsed.date() > datetime.utcnow().date():
+        raise HTTPException(status_code=422, detail="Cannot write an entry for a future date.")
+    return parsed
+
+
+def _day_bounds(day: datetime):
+    start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, day.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+
+def _entry_for_day(db: Session, user_id: str, day: datetime):
+    start, end = _day_bounds(day)
+    return db.query(models.JournalEntry).filter(
+        models.JournalEntry.user_id == user_id,
+        models.JournalEntry.date >= start,
+        models.JournalEntry.date <= end,
+        models.JournalEntry.is_deleted == False
+    ).first()
+
 
 @router.get("/api/entries/today")
 def get_today_entry(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    entry = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id,
-        models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end,
-        models.JournalEntry.is_deleted == False
-    ).first()
-    
+    entry = _entry_for_day(db, user_id, datetime.utcnow())
+    if not entry:
+        return {"content": "", "id": None}
+    return {"content": entry.content, "id": entry.id}
+
+@router.get("/api/entries/by-date")
+def get_entry_by_date(date: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Load the entry for a specific past day (backfill editing)."""
+    entry = _entry_for_day(db, user_id, _parse_entry_date(date))
     if not entry:
         return {"content": "", "id": None}
     return {"content": entry.content, "id": entry.id}
 
 @router.post("/api/entries")
 def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    entry = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id,
-        models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end,
-        models.JournalEntry.is_deleted == False
-    ).first()
-    
+    if data.date:
+        target_day = _parse_entry_date(data.date)
+        # Anchor mid-day so the timestamp stays inside the day window in UTC
+        create_stamp = target_day.replace(hour=12)
+    else:
+        target_day = datetime.utcnow()
+        create_stamp = None  # model default (now)
+
+    entry = _entry_for_day(db, user_id, target_day)
     if entry:
         entry.content = data.content
         entry.updated_at = datetime.utcnow()
         db.commit()
     else:
         new_entry = models.JournalEntry(user_id=user_id, content=data.content)
+        if create_stamp:
+            new_entry.date = create_stamp
         db.add(new_entry)
         db.commit()
         entry = new_entry
-        
+
     return {"success": True, "id": entry.id}
 
 @router.get("/api/entries/history")

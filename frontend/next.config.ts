@@ -9,6 +9,10 @@ const withPWA = withPWAInit({
   register: true,
   cacheOnFrontEndNav: true,
   workboxOptions: {
+    // New service workers wait until the user accepts the update prompt
+    // (UpdatePrompt.tsx) instead of silently serving a mixed old/new app.
+    skipWaiting: false,
+    clientsClaim: true,
     runtimeCaching: [
       {
         // Read-only API data: serve fresh when online, fall back to the last

@@ -4,10 +4,13 @@ Retrieval is two-pronged:
   1. mem0/Qdrant semantic memories (durable life facts extracted at ingest time)
   2. Keyword-matched + recent journal entries straight from Postgres
 
-Both are injected as grounded context so answers cite real dates instead of
-hallucinating a life the user never wrote about.
+Responses stream token-by-token. The wire format is one JSON meta line
+(`{"conversation_id", "sources"}`) followed by raw text deltas; the frontend
+splits on the first newline. Conversations persist per user in
+chat_conversations and can be resumed, listed, and deleted.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -17,6 +20,7 @@ import models
 from .auth import verify_session
 from memory_service import search_memories
 import openai
+import json
 import os
 import re
 
@@ -35,12 +39,12 @@ STOPWORDS = {
     "feel", "felt", "last", "time", "write", "wrote", "diary", "journal", "entry",
 }
 
-class ChatMessage(BaseModel):
-    role: str  # "user" | "assistant"
-    content: str
+MAX_HISTORY_MESSAGES = 10
+
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    question: str
+    conversation_id: str | None = None
 
 
 def _strip_html(text: str) -> str:
@@ -84,12 +88,69 @@ def _retrieve_entries(question: str, user_id: str, db: Session) -> list[models.J
     return combined[:8]
 
 
+def _get_conversation(db: Session, user_id: str, conversation_id: str) -> models.ChatConversation:
+    convo = db.query(models.ChatConversation).filter(
+        models.ChatConversation.id == conversation_id,
+        models.ChatConversation.user_id == user_id,
+    ).first()
+    if not convo:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return convo
+
+
+@router.get("/api/chat/conversations")
+def list_conversations(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    convos = (
+        db.query(models.ChatConversation)
+        .filter(models.ChatConversation.user_id == user_id)
+        .order_by(models.ChatConversation.updated_at.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "conversations": [
+            {
+                "id": c.id,
+                "title": c.title or "Untitled",
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+                "message_count": len(c.messages or []),
+            }
+            for c in convos
+        ]
+    }
+
+
+@router.get("/api/chat/conversations/{conversation_id}")
+def get_conversation(conversation_id: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    convo = _get_conversation(db, user_id, conversation_id)
+    return {"id": convo.id, "title": convo.title, "messages": convo.messages or []}
+
+
+@router.delete("/api/chat/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    convo = _get_conversation(db, user_id, conversation_id)
+    db.delete(convo)
+    db.commit()
+    return {"success": True}
+
+
 @router.post("/api/chat", dependencies=[Depends(rate_limit("chat", 20, 300))])
 def chat_with_diary(payload: ChatRequest, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    user_messages = [m for m in payload.messages if m.role == "user"]
-    if not user_messages:
-        return {"reply": "Ask me anything about your journal — past moods, patterns, or what you wrote about a topic.", "sources": []}
-    question = user_messages[-1].content.strip()[:2000]
+    question = payload.question.strip()[:2000]
+    if not question:
+        raise HTTPException(status_code=422, detail="Ask a question about your journal.")
+
+    if payload.conversation_id:
+        convo = _get_conversation(db, user_id, payload.conversation_id)
+    else:
+        convo = models.ChatConversation(
+            user_id=user_id,
+            title=question[:80],
+            messages=[],
+        )
+        db.add(convo)
+        db.commit()
+        db.refresh(convo)
 
     # 1. Long-term semantic memories (empty string if Qdrant is unavailable)
     memory_context = search_memories(user_id=user_id, query=question, limit=8)
@@ -124,21 +185,45 @@ def chat_with_diary(payload: ChatRequest, user_id: str = Depends(verify_session)
     else:
         system_prompt += "## Journal excerpts:\n\n(No matching entries found.)"
 
-    # Cap the rolling window so long conversations don't balloon token spend
-    history = [{"role": m.role, "content": m.content} for m in payload.messages[-10:]]
-
-    response = client.chat.completions.create(
-        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
-        messages=[{"role": "system", "content": system_prompt}] + history,
-        temperature=0.4,
-        max_tokens=700,
+    # Rolling window over persisted history keeps token spend bounded
+    prior = [
+        {"role": m["role"], "content": m["content"]}
+        for m in (convo.messages or [])[-(MAX_HISTORY_MESSAGES - 1):]
+    ]
+    llm_messages = (
+        [{"role": "system", "content": system_prompt}]
+        + prior
+        + [{"role": "user", "content": question}]
     )
 
-    return {
-        "reply": response.choices[0].message.content,
-        "sources": sources,
-        "usage": {
-            "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-            "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-        },
-    }
+    def token_stream():
+        reply_parts = []
+        yield json.dumps({"conversation_id": convo.id, "sources": sources}) + "\n"
+        try:
+            stream = client.chat.completions.create(
+                model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+                messages=llm_messages,
+                temperature=0.4,
+                max_tokens=700,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    reply_parts.append(delta)
+                    yield delta
+        except Exception as e:
+            error_text = "\n\n(The journal couldn't finish answering — please try again.)"
+            print(f"[chat] stream failed: {e}")
+            reply_parts.append(error_text)
+            yield error_text
+        finally:
+            # Persist the exchange once the stream ends (also on partial failure)
+            convo.messages = (convo.messages or []) + [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": "".join(reply_parts), "sources": sources},
+            ]
+            convo.updated_at = datetime.utcnow()
+            db.commit()
+
+    return StreamingResponse(token_stream(), media_type="text/plain; charset=utf-8")

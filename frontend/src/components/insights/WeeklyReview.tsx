@@ -1,6 +1,7 @@
 "use client"
 import * as React from "react"
 import { ScrollText, RefreshCw, Trophy, CloudRain, Repeat, Compass } from "lucide-react"
+import { HelpfulnessVote } from "@/components/ui/HelpfulnessVote"
 
 interface ReviewData {
   narrative: string
@@ -116,6 +117,8 @@ export function WeeklyReview() {
             </span>
             <p className="text-sm text-gray-800 dark:text-gray-200">{review.nextWeekFocus}</p>
           </div>
+
+          <HelpfulnessVote kind="weekly_review" className="justify-end pt-1" />
         </div>
       )}
     </div>

@@ -13,6 +13,7 @@ import { CheckCircle2, Trash, WifiOff, Maximize2, Minimize2 } from "lucide-react
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
 import { VoiceRecorder } from "./VoiceRecorder"
+import { TemplatePicker } from "./TemplatePicker"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
 
 const REFLECTING_MESSAGES = [
@@ -22,8 +23,34 @@ const REFLECTING_MESSAGES = [
   "Writing your reflection…",
 ]
 
-export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
+// Offline drafts are queued per day: { "2026-07-21": "<p>…</p>", … }
+const DRAFTS_KEY = 'offline_drafts'
+const LEGACY_DRAFT_KEY = 'offline_draft'
+
+function readDraftQueue(): Record<string, string> {
+  try {
+    const legacy = localStorage.getItem(LEGACY_DRAFT_KEY)
+    const queue = JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}')
+    if (legacy) {
+      queue[new Date().toISOString().slice(0, 10)] = legacy
+      localStorage.removeItem(LEGACY_DRAFT_KEY)
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(queue))
+    }
+    return queue
+  } catch {
+    return {}
+  }
+}
+
+function writeDraftQueue(queue: Record<string, string>) {
+  if (Object.keys(queue).length === 0) localStorage.removeItem(DRAFTS_KEY)
+  else localStorage.setItem(DRAFTS_KEY, JSON.stringify(queue))
+}
+
+export function JournalEditor({ initialContent = "", initialId = null, entryDate = null }: { initialContent?: string, initialId?: string | null, entryDate?: string | null }) {
   const isOnline = useNetworkStatus()
+  const isBackdate = !!entryDate
+  const dayKey = entryDate || new Date().toISOString().slice(0, 10)
   const [isSaving, setIsSaving] = React.useState(false)
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [processStage, setProcessStage] = React.useState<string>("")
@@ -31,7 +58,8 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [aiError, setAiError] = React.useState<string | null>(null)
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null)
   const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(initialId)
-  const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
+  const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15 && !entryDate)
+  const [pendingDrafts, setPendingDrafts] = React.useState(0)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
@@ -66,27 +94,40 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       .catch(() => {})
   }, [])
 
+  // Sync the whole offline queue (any number of days) when we come back online
   React.useEffect(() => {
-    if (isOnline) {
-      const offlineDraft = localStorage.getItem('offline_draft');
-      if (offlineDraft) {
-        setIsSaving(true);
-        fetch('/api/entries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: offlineDraft })
-        })
-        .then(res => res.json())
-        .then(resData => {
-           if (resData.id) setCurrentEntryId(resData.id);
-           localStorage.removeItem('offline_draft');
-           setLastSaved(new Date());
-        })
-        .catch(console.error)
-        .finally(() => setIsSaving(false));
+    const queue = readDraftQueue()
+    setPendingDrafts(Object.keys(queue).length)
+    if (!isOnline || Object.keys(queue).length === 0) return
+
+    let cancelled = false
+    ;(async () => {
+      setIsSaving(true)
+      const remaining = { ...queue }
+      for (const [date, content] of Object.entries(queue)) {
+        try {
+          const res = await fetch('/api/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, date }),
+          })
+          if (!res.ok) continue // keep in queue, retried on next online event
+          const resData = await res.json()
+          delete remaining[date]
+          if (date === dayKey && resData.id) setCurrentEntryId(resData.id)
+        } catch {
+          // network flaked again — keep the draft
+        }
       }
-    }
-  }, [isOnline]);
+      if (!cancelled) {
+        writeDraftQueue(remaining)
+        setPendingDrafts(Object.keys(remaining).length)
+        setLastSaved(new Date())
+        setIsSaving(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isOnline, dayKey]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -117,9 +158,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       timeoutRef.current = setTimeout(async () => {
         try {
           const htmlContent = editor.getHTML()
-          
+
           if (!navigator.onLine) {
-            localStorage.setItem('offline_draft', htmlContent);
+            const queue = readDraftQueue()
+            queue[dayKey] = htmlContent
+            writeDraftQueue(queue)
+            setPendingDrafts(Object.keys(queue).length)
             setLastSaved(new Date());
             setIsSaving(false);
             return;
@@ -128,7 +172,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
           const res = await fetch('/api/entries', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: htmlContent })
+            body: JSON.stringify(entryDate ? { content: htmlContent, date: entryDate } : { content: htmlContent })
           });
           if (res.ok) {
             const resData = await res.json();
@@ -166,7 +210,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       const saveRes = await fetch('/api/entries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: htmlContent })
+        body: JSON.stringify(entryDate ? { content: htmlContent, date: entryDate } : { content: htmlContent })
       });
       if (saveRes.ok) {
         setLastSaved(new Date());
@@ -286,9 +330,19 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       : "flex flex-col h-full w-full pt-6"
     }>
       <div className={`flex justify-between items-center px-2 lg:px-6 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
-        <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-        </h1>
+        <div className="flex items-center gap-3 min-w-0">
+          <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">
+            {(entryDate ? new Date(entryDate + 'T00:00:00') : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          </h1>
+          {isBackdate && (
+            <span className="flex items-center gap-2 flex-shrink-0">
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[10px] font-bold uppercase tracking-wider">
+                Backfill
+              </span>
+              <a href="/" className="text-xs font-medium text-primary hover:underline whitespace-nowrap">→ Today</a>
+            </span>
+          )}
+        </div>
         <div className="flex items-center space-x-4 fade-in">
           {preferences?.enable_deletion && currentEntryId && (
             <button
@@ -300,6 +354,14 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
               <Trash className="w-4 h-4" />
             </button>
           )}
+          <TemplatePicker
+            onInsert={(html) => {
+              if (!editor) return
+              editor.commands.insertContentAt(editor.state.doc.content.size, html)
+              editor.commands.focus('end')
+              setShowIntentions(false)
+            }}
+          />
           <button
             onClick={() => setZenMode(z => !z)}
             className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
@@ -327,6 +389,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
           ) : (
             <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
           )}
+          {pendingDrafts > 0 && isOnline === false && (
+            <span className="text-xs font-semibold text-orange-500 bg-orange-500/10 border border-orange-500/20 px-3 py-1 rounded-full whitespace-nowrap">
+              {pendingDrafts} draft{pendingDrafts > 1 ? 's' : ''} queued
+            </span>
+          )}
           <div className="flex items-center space-x-2 text-sm text-gray-500 font-medium bg-black/5 dark:bg-white/5 px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10">
             {isSaving ? (
               <>
@@ -346,7 +413,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </div>
       </div>
       
-      {!zenMode && (
+      {!zenMode && !isBackdate && (
         <>
           <DecisionNudge />
 
@@ -366,8 +433,13 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background to-transparent pointer-events-none"></div>
       </div>
 
-      {/* Save & Reflect FAB */}
-      <div className={`absolute ${zenMode ? "bottom-8" : "bottom-24 md:bottom-8"} right-6 lg:right-10 z-50`} suppressHydrationWarning>
+      {/* Save & Reflect FAB — AI reflection only applies to today's entry */}
+      {isBackdate && (
+        <p className="text-center text-xs text-gray-400 pb-3 px-6">
+          Autosaves as you write. AI reflection runs on today's entry only.
+        </p>
+      )}
+      {!isBackdate && <div className={`absolute ${zenMode ? "bottom-8" : "bottom-24 md:bottom-8"} right-6 lg:right-10 z-50`} suppressHydrationWarning>
          <button 
            onClick={handleSaveAndReflect}
            disabled={!editor || isProcessing || wordCount < 3}
@@ -393,7 +465,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
              </>
            )}
          </button>
-      </div>
+      </div>}
 
       {aiError && (
         <div className="mb-6 mx-2 lg:mx-6 p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl flex items-start justify-between fade-in shadow-sm">

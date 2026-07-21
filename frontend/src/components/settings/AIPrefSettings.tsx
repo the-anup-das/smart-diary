@@ -57,13 +57,15 @@ export function AIPrefSettings() {
         <p className="text-sm text-gray-500">Fine-tune how the AI analyzes your journal.</p>
       </CardHeader>
       <CardContent className="space-y-6">
-        
+
+        <ProviderPanel />
+
         <div className="space-y-1">
-           <ToggleSwitch 
-              label="Pause AI Analysis" 
-              description="Temporarily skip OpenAI processing to save entries 100% locally." 
-              checked={!!prefs?.pause_ai} 
-              onChange={(val: any) => updatePref('pause_ai', val)} 
+           <ToggleSwitch
+              label="Pause AI Analysis"
+              description="Temporarily skip OpenAI processing to save entries 100% locally."
+              checked={!!prefs?.pause_ai}
+              onChange={(val: any) => updatePref('pause_ai', val)}
            />
         </div>
 
@@ -122,5 +124,67 @@ export function AIPrefSettings() {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+/** Shows which AI provider the server is configured with, and verifies it responds.
+    Switching providers (e.g. to a local Ollama) is done via env vars — see README. */
+function ProviderPanel() {
+  const [config, setConfig] = React.useState<any>(null)
+  const [testing, setTesting] = React.useState(false)
+  const [result, setResult] = React.useState<any>(null)
+
+  React.useEffect(() => {
+    fetch("/api/ai/config")
+      .then(res => (res.ok ? res.json() : null))
+      .then(setConfig)
+      .catch(() => {})
+  }, [])
+
+  const runTest = async () => {
+    setTesting(true)
+    setResult(null)
+    try {
+      const res = await fetch("/api/ai/test", { method: "POST" })
+      setResult(await res.json())
+    } catch {
+      setResult({ ok: false, error: "Could not reach the backend." })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">AI Provider</p>
+          {config ? (
+            <p className="text-xs text-gray-500 font-mono mt-0.5">
+              {config.host} · {config.chat_model}
+              {config.is_custom && (
+                <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-sans font-semibold not-italic">custom endpoint</span>
+              )}
+            </p>
+          ) : (
+            <p className="text-xs text-gray-400 mt-0.5">Loading…</p>
+          )}
+        </div>
+        <Button variant="secondary" onClick={runTest} disabled={testing || !config}>
+          {testing ? "Testing…" : "Test connection"}
+        </Button>
+      </div>
+      {result && (
+        <p className={`text-xs font-medium fade-in ${result.ok ? "text-success" : "text-danger"}`} role="status">
+          {result.ok
+            ? `✓ Responding in ${result.latency_ms}ms (${result.model})`
+            : `✗ ${result.error}`}
+        </p>
+      )}
+      <p className="text-[11px] text-gray-400 leading-relaxed">
+        To run fully local, point the backend at Ollama via <code className="font-mono bg-black/5 dark:bg-white/10 px-1 rounded">OPENAI_BASE_URL</code> and{" "}
+        <code className="font-mono bg-black/5 dark:bg-white/10 px-1 rounded">CHAT_MODEL</code> in your .env — see the README's "Local LLM" section.
+      </p>
+    </div>
   )
 }

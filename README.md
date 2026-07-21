@@ -83,13 +83,37 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 ---
 
 ## ⚙️ Core System Features
-- **Mem0 Integration:** Local, self-hosted long-term memory via Qdrant. The AI "remembers" your spouse's name, your career goals, and past fears.
-- **Find Your Energy:** A comprehensive mental wellness dashboard tracking daily battery levels, Stoic Circle of Control reframing, and weekly attention heatmaps.
-- **Dynamic Reasoning:** No more hardcoded categories. The AI discovers what factors matter most for your specific life event.
-- **AI Quality Benchmarking:** Integrated **DeepEval** test suite for measuring AI faithfulness and answer relevancy.
-- **Cost Transparency:** Built-in token tracking and estimated cost dashboard to monitor and optimize AI resource usage.
-- **PWA Excellence:** Offline-first editing with a custom React sync queue.
-- **NAS Optimized:** Built for Synology/QNAP/Home Servers with x86 and ARM64 support.
+
+**Write**
+- **Daily journal** with rich text (Tiptap), autosave, and a distraction-free **Focus Mode**.
+- **Voice journaling:** continuous dictation via a self-hosted Whisper (faster-whisper) container — audio never leaves your server.
+- **Guided templates:** Three Good Things, CBT Thought Record, Stoic Evening Review, Morning Pages, Five-Minute Journal, Worry Dump, Self-Compassion Break.
+- **Backfill missed days:** click any empty past day in History to write that day's entry.
+- **Offline write queue:** entries written offline are queued per day and synced when you reconnect.
+
+**Reflect**
+- **Save & Reflect:** AI analysis of mood, topics, grammar, open loops, cognitive reframes, and writing style.
+- **Weekly AI Review:** a narrative retrospective of your week — wins, challenges, themes, and next-week focus.
+- **On This Day + mood heatmap:** date-based memory resurfacing and a year-at-a-glance mood calendar.
+- **Find Your Energy:** mental battery, Stoic Circle of Control reframing, rumination coaching, micro-actions.
+
+**Ask**
+- **Chat with your journal (RAG):** streaming answers grounded in your own entries with clickable date citations; conversations are saved and resumable.
+- **Full-text search** across all entries with mood/sentiment/topic/date filters.
+
+**Decide**
+- **Decision Swarm:** multi-agent LangGraph analysis of hard choices, grounded in Mem0 long-term memory (Qdrant).
+- **Decision review nudges:** predicted vs. actual outcome follow-ups that close the loop on past decisions.
+
+**Trust & Operations**
+- **Mem0 Integration:** local, self-hosted long-term memory via Qdrant — the AI "remembers" your goals, values, and past fears.
+- **Helpfulness feedback:** 👍/👎 on every AI output, stored locally, so quality is measured rather than assumed.
+- **Self-healing migrations:** Alembic-managed schema that automatically adopts and repairs older installs at startup.
+- **Security:** JWT sessions, password reset (SMTP or log-link), auth rate limiting, single-purpose reset tokens.
+- **AI Quality Benchmarking:** integrated **DeepEval** suite for AI faithfulness and relevancy.
+- **Cost Transparency:** token tracking and estimated cost dashboard; **Test Connection** button for custom/local providers.
+- **PWA Excellence:** offline-first editing, update prompts on new versions, installable on mobile with a bottom tab bar.
+- **NAS Optimized:** built for Synology/QNAP/Home Servers with x86 and ARM64 support.
 
 ---
 

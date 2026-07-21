@@ -7,14 +7,20 @@ import os
 import time
 from sqlalchemy.exc import OperationalError
 
-# Intelligently builds tracking tables, gracefully polling if Postgres is computationally slow to boot inside Docker 
+# Self-healing schema bootstrap (Alembic), polling while Postgres boots in Docker
+from run_migrations import run_migrations
+
 for _ in range(15):
     try:
-        models.Base.metadata.create_all(bind=engine)
+        run_migrations()
         break
     except OperationalError:
         print("Waiting for Postgres Docker Network to map...")
         time.sleep(2)
+    except Exception as e:
+        # A stale schema beats a crash loop on a home server — log and continue.
+        print(f"[migrations] WARNING: migration failed, starting anyway: {e}")
+        break
 
 app = FastAPI(title="AI Diary Core API", version="1.0")
 
@@ -33,7 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routers import auth, entries, analyze, insights, users, decisions, voice, chat
+from routers import auth, entries, analyze, insights, users, decisions, voice, chat, feedback, ai_config
 
 app.include_router(auth.router)
 app.include_router(entries.router)
@@ -43,6 +49,8 @@ app.include_router(users.router)
 app.include_router(decisions.router)
 app.include_router(voice.router)
 app.include_router(chat.router)
+app.include_router(feedback.router)
+app.include_router(ai_config.router)
 @app.get("/api/health")
 async def health_check():
     return {"status": "operational", "engine": "FastAPI"}

@@ -96,3 +96,25 @@ class Decision(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     user = relationship("User")
+
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String, nullable=True)
+    messages = Column(JSON, nullable=True)  # [{role, content, sources?}]
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+class AIFeedback(Base):
+    __tablename__ = "ai_feedback"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String, nullable=False)  # reflection | chat | weekly_review
+    ref_id = Column(String, nullable=True)  # entry id / conversation id / week key
+    vote = Column(Integer, nullable=False)  # 1 = helpful, -1 = not helpful
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")

@@ -2,6 +2,7 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash, GitMerge, ArrowRight } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
+import { HelpfulnessVote } from "@/components/ui/HelpfulnessVote"
 
 export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { feedback: any, preferences?: any, onClose?: () => void }) {
   const router = useRouter()
@@ -202,6 +203,8 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
           </div>
         </GlassCard>
       )}
+
+      <HelpfulnessVote kind="reflection" className="justify-center py-2" />
     </div>
   )
 }
