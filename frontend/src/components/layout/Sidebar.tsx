@@ -38,10 +38,12 @@ export function Sidebar() {
         </div>
         
         {/* Explicitly Visible Collapse Toggle */}
-        <button 
-          onClick={() => setIsCollapsed(!isCollapsed)} 
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
           className={cn("p-1.5 rounded-lg border hover:border-black/10 dark:hover:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-gray-500 transition-all flex-shrink-0 bg-transparent cursor-pointer relative z-50", isCollapsed ? "border-black/5 dark:border-white/5" : "border-transparent")}
           title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!isCollapsed}
         >
           {isCollapsed ? <ChevronRight className="w-5 h-5 ml-0.5" /> : <ChevronLeft className="w-5 h-5 pr-0.5" />}
         </button>

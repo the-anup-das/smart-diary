@@ -14,49 +14,51 @@ export default function EnergyPage() {
   const [loading, setLoading] = useState(true)
   const [energyData, setEnergyData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isNetworkError, setIsNetworkError] = useState(false)
 
-  useEffect(() => {
-    async function fetchEnergyData() {
-      try {
-        const res = await fetch("/api/energy/today")
-        const data = await res.json()
-        if (data.success && data.energy_data) {
-          setEnergyData(data.energy_data)
-        } else {
-          setError(data.detail || "No analysis available today. Write an entry to see your energy.")
-        }
-      } catch (err) {
-        setError("Failed to load energy data.")
-      } finally {
-        setLoading(false)
+  const fetchEnergyData = React.useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    setIsNetworkError(false)
+    try {
+      const res = await fetch("/api/energy/today")
+      const data = await res.json()
+      if (data.success && data.energy_data) {
+        setEnergyData(data.energy_data)
+      } else {
+        setError(data.detail || "No analysis available today. Write an entry to see your energy.")
       }
+    } catch (err) {
+      setError("Could not reach the server for your energy data.")
+      setIsNetworkError(true)
+    } finally {
+      setLoading(false)
     }
-    fetchEnergyData()
   }, [])
+
+  useEffect(() => { fetchEnergyData() }, [fetchEnergyData])
+
+  const toggleActionState = (prev: any, id: string) => {
+    const newActions = prev.micro_actions.map((a: any) =>
+      a.id === id ? { ...a, completed: !a.completed } : a
+    )
+    const wasCompleted = prev.micro_actions.find((a: any) => a.id === id)?.completed
+    const batteryChange = wasCompleted ? -3 : 3
+    const newBattery = Math.min(100, Math.max(0, prev.battery_level + batteryChange))
+    return { ...prev, micro_actions: newActions, battery_level: newBattery }
+  }
 
   const handleToggleAction = async (id: string) => {
     // Optimistic UI Update
-    setEnergyData((prev: any) => {
-      const newActions = prev.micro_actions.map((a: any) => 
-        a.id === id ? { ...a, completed: !a.completed } : a
-      )
-      
-      const wasCompleted = prev.micro_actions.find((a: any) => a.id === id)?.completed
-      const batteryChange = wasCompleted ? -3 : 3
-      const newBattery = Math.min(100, Math.max(0, prev.battery_level + batteryChange))
-      
-      return {
-        ...prev,
-        micro_actions: newActions,
-        battery_level: newBattery
-      }
-    })
+    setEnergyData((prev: any) => toggleActionState(prev, id))
 
-    // Persist
+    // Persist — roll the toggle back if the server didn't record it
     try {
-      await fetch(`/api/energy/actions/${id}`, { method: 'PATCH' })
+      const res = await fetch(`/api/energy/actions/${id}`, { method: 'PATCH' })
+      if (!res.ok) throw new Error(`status ${res.status}`)
     } catch (e) {
       console.error("Failed to toggle action", e)
+      setEnergyData((prev: any) => toggleActionState(prev, id))
     }
   }
 
@@ -85,9 +87,18 @@ export default function EnergyPage() {
         <div className="bg-card border rounded-2xl p-12 flex flex-col items-center justify-center text-center">
           <AlertCircle className="w-12 h-12 text-muted-foreground/50 mb-4" />
           <p className="text-lg font-medium text-foreground">{error || "No data available."}</p>
-          <p className="text-muted-foreground mt-2 max-w-md">
-            Your energy battery is charged by your thoughts. Write a diary entry today and let the AI analyze your mental state to unlock this dashboard.
-          </p>
+          {isNetworkError ? (
+            <button
+              onClick={fetchEnergyData}
+              className="mt-4 px-5 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+            >
+              Try again
+            </button>
+          ) : (
+            <p className="text-muted-foreground mt-2 max-w-md">
+              Your energy battery is charged by your thoughts. Write a diary entry today and let the AI analyze your mental state to unlock this dashboard.
+            </p>
+          )}
         </div>
       </div>
     )

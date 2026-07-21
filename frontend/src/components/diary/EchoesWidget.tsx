@@ -27,7 +27,7 @@ export function EchoesWidget() {
             <History className="w-5 h-5 text-primary" />
             <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Synchronicity: {echo.date}</h3>
           </div>
-          <button onClick={() => setVisible(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+          <button onClick={() => setVisible(false)} aria-label="Dismiss echo" className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>

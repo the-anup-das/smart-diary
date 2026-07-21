@@ -279,10 +279,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </h1>
         <div className="flex items-center space-x-4 fade-in">
           {preferences?.enable_deletion && currentEntryId && (
-            <button 
+            <button
               onClick={handleDelete}
               className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer group"
               title="Delete Current Entry"
+              aria-label="Delete current entry"
             >
               <Trash className="w-4 h-4" />
             </button>

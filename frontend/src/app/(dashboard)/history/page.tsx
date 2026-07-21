@@ -615,6 +615,7 @@ function EntryCard({ entry, isExpanded, onToggle, onReadFull, preferences, onDel
                 onClick={(e) => { e.stopPropagation(); onDelete(entry.id, entry.date) }}
                 className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer mr-1 focus:outline-none focus:ring-2 focus:ring-red-500/40"
                 title="Delete Entry"
+                aria-label={`Delete entry from ${dateLabel}`}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -744,10 +745,11 @@ function FullEntryModal({ entry, onClose, preferences }: {
         </h1>
         <div className="flex items-center space-x-4">
           <span className="text-sm text-gray-400 font-mono tracking-wide">{entry.wordCount} words</span>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-all cursor-pointer"
             title="Close"
+            aria-label="Close full entry"
           >
             <ChevronDown className="w-5 h-5" />
           </button>
