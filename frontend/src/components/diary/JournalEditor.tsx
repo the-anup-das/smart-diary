@@ -7,12 +7,51 @@ import Image from '@tiptap/extension-image'
 import { FeedbackDashboard } from "./FeedbackDashboard"
 import { EchoesWidget } from "./EchoesWidget"
 import { MorningIntentions } from "./MorningIntentions"
-import { CheckCircle2, Trash, WifiOff } from "lucide-react"
+import { OnThisDay } from "./OnThisDay"
+import { DecisionNudge } from "./DecisionNudge"
+import { CheckCircle2, Trash, WifiOff, Maximize2, Minimize2 } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
+import { VoiceRecorder } from "./VoiceRecorder"
+import { TemplatePicker, TEMPLATES } from "./TemplatePicker"
+import { MoodCheckin } from "@/components/wellbeing/MoodCheckin"
+import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
 
-export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
+const REFLECTING_MESSAGES = [
+  "Reading your day…",
+  "Noticing patterns…",
+  "Measuring your energy…",
+  "Writing your reflection…",
+]
+
+// Offline drafts are queued per day: { "2026-07-21": "<p>…</p>", … }
+const DRAFTS_KEY = 'offline_drafts'
+const LEGACY_DRAFT_KEY = 'offline_draft'
+
+function readDraftQueue(): Record<string, string> {
+  try {
+    const legacy = localStorage.getItem(LEGACY_DRAFT_KEY)
+    const queue = JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}')
+    if (legacy) {
+      queue[new Date().toISOString().slice(0, 10)] = legacy
+      localStorage.removeItem(LEGACY_DRAFT_KEY)
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(queue))
+    }
+    return queue
+  } catch {
+    return {}
+  }
+}
+
+function writeDraftQueue(queue: Record<string, string>) {
+  if (Object.keys(queue).length === 0) localStorage.removeItem(DRAFTS_KEY)
+  else localStorage.setItem(DRAFTS_KEY, JSON.stringify(queue))
+}
+
+export function JournalEditor({ initialContent = "", initialId = null, entryDate = null }: { initialContent?: string, initialId?: string | null, entryDate?: string | null }) {
   const isOnline = useNetworkStatus()
+  const isBackdate = !!entryDate
+  const dayKey = entryDate || new Date().toISOString().slice(0, 10)
   const [isSaving, setIsSaving] = React.useState(false)
   const [isProcessing, setIsProcessing] = React.useState(false)
   const [processStage, setProcessStage] = React.useState<string>("")
@@ -20,10 +59,18 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [aiError, setAiError] = React.useState<string | null>(null)
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null)
   const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(initialId)
-  const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
+  const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15 && !entryDate)
+  const [pendingDrafts, setPendingDrafts] = React.useState(0)
+  const [prefsLoaded, setPrefsLoaded] = React.useState(false)
+  const [arrivalMood, setArrivalMood] = React.useState<number | null>(null)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
+  const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
+  const [zenMode, setZenMode] = React.useState(false)
+  const [sttEnabled, setSttEnabled] = React.useState(false)
+  const [sttModel, setSttModel] = React.useState<string>("")
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  const typeQueueRef = React.useRef<string[]>([])
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -31,32 +78,81 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       .then(data => {
         if (!data.detail && data.preferences) {
           setPreferences(data.preferences)
+          const today = new Date().toISOString().slice(0, 10)
+          setArrivalMood(data.preferences.arrival_moods?.[today] ?? null)
+        }
+        setPrefsLoaded(true)
+      })
+      .catch(() => setPrefsLoaded(true))
+  }, [])
+
+  // Pennebaker expressive-writing program: next day (1-4) or null when done
+  const expressiveDaysDone: string[] = preferences?.expressive?.days_done || []
+  const programDay = expressiveDaysDone.length < 4 ? expressiveDaysDone.length + 1 : null
+
+  const markProgramDay = React.useCallback(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (expressiveDaysDone.includes(today)) return
+    const newPrefs = {
+      ...preferences,
+      expressive: { days_done: [...expressiveDaysDone, today] },
+    }
+    setPreferences(newPrefs)
+    fetch("/api/users/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: newPrefs }),
+    }).catch(() => {})
+  }, [preferences, expressiveDaysDone])
+
+  // Check if STT is configured and kick off a background model warm-up
+  React.useEffect(() => {
+    fetch("/api/voice/status")
+      .then(res => res.json())
+      .then(data => {
+        if (data.enabled) {
+          setSttEnabled(true)
+          if (data.model) setSttModel(data.model)
+          fetch("/api/voice/warm", { method: "POST" }).catch(() => {})
         }
       })
       .catch(() => {})
   }, [])
 
+  // Sync the whole offline queue (any number of days) when we come back online
   React.useEffect(() => {
-    if (isOnline) {
-      const offlineDraft = localStorage.getItem('offline_draft');
-      if (offlineDraft) {
-        setIsSaving(true);
-        fetch('/api/entries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: offlineDraft })
-        })
-        .then(res => res.json())
-        .then(resData => {
-           if (resData.id) setCurrentEntryId(resData.id);
-           localStorage.removeItem('offline_draft');
-           setLastSaved(new Date());
-        })
-        .catch(console.error)
-        .finally(() => setIsSaving(false));
+    const queue = readDraftQueue()
+    setPendingDrafts(Object.keys(queue).length)
+    if (!isOnline || Object.keys(queue).length === 0) return
+
+    let cancelled = false
+    ;(async () => {
+      setIsSaving(true)
+      const remaining = { ...queue }
+      for (const [date, content] of Object.entries(queue)) {
+        try {
+          const res = await fetch('/api/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, date }),
+          })
+          if (!res.ok) continue // keep in queue, retried on next online event
+          const resData = await res.json()
+          delete remaining[date]
+          if (date === dayKey && resData.id) setCurrentEntryId(resData.id)
+        } catch {
+          // network flaked again — keep the draft
+        }
       }
-    }
-  }, [isOnline]);
+      if (!cancelled) {
+        writeDraftQueue(remaining)
+        setPendingDrafts(Object.keys(remaining).length)
+        setLastSaved(new Date())
+        setIsSaving(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isOnline, dayKey]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -87,9 +183,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       timeoutRef.current = setTimeout(async () => {
         try {
           const htmlContent = editor.getHTML()
-          
+
           if (!navigator.onLine) {
-            localStorage.setItem('offline_draft', htmlContent);
+            const queue = readDraftQueue()
+            queue[dayKey] = htmlContent
+            writeDraftQueue(queue)
+            setPendingDrafts(Object.keys(queue).length)
             setLastSaved(new Date());
             setIsSaving(false);
             return;
@@ -98,7 +197,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
           const res = await fetch('/api/entries', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: htmlContent })
+            body: JSON.stringify(entryDate ? { content: htmlContent, date: entryDate } : { content: htmlContent })
           });
           if (res.ok) {
             const resData = await res.json();
@@ -115,6 +214,13 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       }, 1500) 
     }
   })
+
+  const insertTemplateByKey = React.useCallback((key: string) => {
+    const template = TEMPLATES.find(t => t.key === key)
+    if (!template || !editor) return
+    editor.commands.insertContentAt(editor.state.doc.content.size, template.html)
+    editor.commands.focus('end')
+  }, [editor])
 
   async function handleSaveAndReflect() {
     if (!editor) return;
@@ -136,7 +242,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       const saveRes = await fetch('/api/entries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: htmlContent })
+        body: JSON.stringify(entryDate ? { content: htmlContent, date: entryDate } : { content: htmlContent })
       });
       if (saveRes.ok) {
         setLastSaved(new Date());
@@ -207,6 +313,16 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }, [])
 
+  // Escape exits focus mode
+  React.useEffect(() => {
+    if (!zenMode) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZenMode(false)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [zenMode])
+
   const handleSelectIntention = (prompt: string) => {
     if (editor) {
       editor.commands.focus('end');
@@ -215,23 +331,88 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }
 
+  const processTypeQueue = React.useCallback(() => {
+    if (typeQueueRef.current.length === 0 || !editor) return
+    // Insert the whole chunk in one call: char-by-char insertContent drops
+    // whitespace-only strings (TipTap parses them as HTML), which glued
+    // dictated words together. Appending at the document end (instead of
+    // focus('end') + insert) also leaves the caret alone if the user is
+    // typing elsewhere mid-transcription.
+    const text = typeQueueRef.current.splice(0).join("")
+    const literal = text.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    editor.commands.insertContentAt(editor.state.doc.content.size, literal, {
+      parseOptions: { preserveWhitespace: 'full' },
+    })
+  }, [editor])
+
+  const handleTranscript = React.useCallback((text: string) => {
+    if (!editor || !text.trim()) return
+    const isEmpty = editor.getText().trim().length === 0
+    const textToInsert = isEmpty ? text : ' ' + text
+    
+    typeQueueRef.current.push(textToInsert)
+    processTypeQueue()
+  }, [editor, processTypeQueue])
+
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
   return (
-    <div className="flex flex-col h-full w-full pt-6">
-      <div className="flex justify-between items-center mb-10 px-2 lg:px-6">
-        <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-        </h1>
+    <div className={zenMode
+      ? "fixed inset-0 z-[100] bg-background flex flex-col pt-6 px-4 lg:px-0 overflow-hidden"
+      : "flex flex-col h-full w-full pt-6"
+    }>
+      <div className={`flex justify-between items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
+        <div className="flex items-center gap-3 min-w-0">
+          <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">
+            {(entryDate ? new Date(entryDate + 'T00:00:00') : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          </h1>
+          {isBackdate && (
+            <span className="flex items-center gap-2 flex-shrink-0">
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[10px] font-bold uppercase tracking-wider">
+                Backfill
+              </span>
+              <a href="/" className="text-xs font-medium text-primary hover:underline whitespace-nowrap">→ Today</a>
+            </span>
+          )}
+        </div>
         <div className="flex items-center space-x-4 fade-in">
           {preferences?.enable_deletion && currentEntryId && (
-            <button 
+            <button
               onClick={handleDelete}
               className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer group"
               title="Delete Current Entry"
+              aria-label="Delete current entry"
             >
               <Trash className="w-4 h-4" />
             </button>
+          )}
+          <TemplatePicker
+            onInsert={(html) => {
+              if (!editor) return
+              editor.commands.insertContentAt(editor.state.doc.content.size, html)
+              editor.commands.focus('end')
+              setShowIntentions(false)
+            }}
+            programDay={isBackdate ? null : programDay}
+            onProgramInsert={markProgramDay}
+          />
+          <button
+            onClick={() => setZenMode(z => !z)}
+            className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
+            title={zenMode ? "Exit focus mode (Esc)" : "Focus mode — hide everything but your writing"}
+            aria-label={zenMode ? "Exit focus mode" : "Enter focus mode"}
+            aria-pressed={zenMode}
+          >
+            {zenMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+          {/* Voice recorder — only shown when STT_BASE_URL is configured */}
+          {sttEnabled && (
+            <VoiceRecorder
+              onTranscript={handleTranscript}
+              onRecordingChange={setIsVoiceRecording}
+              disabled={!isOnline}
+              modelName={sttModel}
+            />
           )}
           {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
             <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
@@ -241,6 +422,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
             </div>
           ) : (
             <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
+          )}
+          {pendingDrafts > 0 && isOnline === false && (
+            <span className="text-xs font-semibold text-orange-500 bg-orange-500/10 border border-orange-500/20 px-3 py-1 rounded-full whitespace-nowrap">
+              {pendingDrafts} draft{pendingDrafts > 1 ? 's' : ''} queued
+            </span>
           )}
           <div className="flex items-center space-x-2 text-sm text-gray-500 font-medium bg-black/5 dark:bg-white/5 px-4 py-1.5 rounded-full border border-black/10 dark:border-white/10">
             {isSaving ? (
@@ -261,11 +447,23 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </div>
       </div>
       
-      <EchoesWidget />
-      
-      <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
-      
-      <div className="flex-1 relative overflow-hidden group">
+      {!zenMode && !isBackdate && prefsLoaded && arrivalMood === null && wordCount < 15 && !feedbackData && (
+        <MoodCheckin onCheckin={setArrivalMood} />
+      )}
+
+      {!zenMode && !isBackdate && (
+        <>
+          <DecisionNudge />
+
+          <OnThisDay />
+
+          <EchoesWidget />
+
+          <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
+        </>
+      )}
+
+      <div className={`flex-1 relative overflow-hidden group ${zenMode ? "max-w-3xl mx-auto w-full min-h-0" : ""}`}>
         <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 pt-4 pb-[300px] custom-scrollbar overflow-y-auto scroll-smooth scroll-pb-[200px]`}>
           <EditorContent editor={editor} />
         </div>
@@ -273,19 +471,29 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background to-transparent pointer-events-none"></div>
       </div>
 
-      {/* Save & Reflect FAB */}
-      <div className="absolute bottom-8 right-6 lg:right-10 z-50" suppressHydrationWarning>
+      {/* Save & Reflect FAB — AI reflection only applies to today's entry */}
+      {isBackdate && (
+        <p className="text-center text-xs text-gray-400 pb-3 px-6">
+          Autosaves as you write. AI reflection runs on today's entry only.
+        </p>
+      )}
+      {!isBackdate && <div className={`absolute ${zenMode ? "bottom-8" : "bottom-24 md:bottom-8"} right-6 lg:right-10 z-50`} suppressHydrationWarning>
          <button 
            onClick={handleSaveAndReflect}
            disabled={!editor || isProcessing || wordCount < 3}
            suppressHydrationWarning
-           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ring-primary/20 bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
+           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ${
+             isVoiceRecording
+               ? 'ring-red-500/40 shadow-[0_8px_30px_rgba(239,68,68,0.35)]'
+               : 'ring-primary/20'
+           } bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
          >
            {isProcessing ? (
-             <span className="flex items-center space-x-2 px-4">
-               <span className="animate-spin text-xl">⏳</span>
-               <span className="font-bold text-sm tracking-wide whitespace-nowrap">{processStage}</span>
-             </span>
+             <ReflectingIndicator
+               compact
+               messages={processStage === "Saving entry..." ? ["Saving your words…"] : REFLECTING_MESSAGES}
+               className="px-4 font-bold text-sm tracking-wide"
+             />
            ) : (
              <>
                <CheckCircle2 className="w-6 h-6 flex-shrink-0 group-hover:scale-110 transition-transform drop-shadow-md" />
@@ -295,7 +503,7 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
              </>
            )}
          </button>
-      </div>
+      </div>}
 
       {aiError && (
         <div className="mb-6 mx-2 lg:mx-6 p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl flex items-start justify-between fade-in shadow-sm">
@@ -313,7 +521,13 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </div>
       )}
 
-      <FeedbackDashboard feedback={feedbackData} preferences={preferences} onClose={() => setFeedbackData(null)} />
+      <FeedbackDashboard
+        feedback={feedbackData}
+        preferences={preferences}
+        onClose={() => setFeedbackData(null)}
+        arrivalMood={arrivalMood}
+        onInsertTemplate={insertTemplateByKey}
+      />
 
       {showDeleteModal && (
         <DeleteConfirmationModal

@@ -7,6 +7,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { action } = await params;
     const body = await request.text();
 
+    // Deliberately do NOT forward the incoming X-Forwarded-For: it is
+    // client-controlled here, and the backend only trusts it when the operator
+    // sets TRUST_PROXY_HEADERS behind a proxy that appends the real address.
     const res = await fetch(`${BACKEND_URL}/api/auth/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

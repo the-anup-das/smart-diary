@@ -1,14 +1,22 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import get_db
 import models
 from .auth import verify_session
+import openai
+import os
 import re
 
 router = APIRouter()
+
+_openai_client = openai.OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL", None)
+)
 
 def _get_date_range(range_str: str):
     """Compute start date based on the range filter."""
@@ -238,8 +246,28 @@ def get_insights(
     ).count()
     
     top_sentiment = max(sentiments, key=sentiments.get) if sentiments else "—"
-    
+
+    # Gentle care nudge: sustained low mood over the last two weeks (needs a
+    # meaningful sample so one bad day never triggers it)
+    fortnight_ago = datetime.utcnow() - timedelta(days=14)
+    recent_moods = [
+        fb.mood_score
+        for entry, fb in (
+            db.query(models.JournalEntry, models.FeedbackReport)
+            .join(models.FeedbackReport, models.FeedbackReport.journal_entry_id == models.JournalEntry.id)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date >= fortnight_ago,
+                models.FeedbackReport.mood_score != None,
+            )
+            .all()
+        )
+    ]
+    persistent_low_mood = len(recent_moods) >= 7 and (sum(recent_moods) / len(recent_moods)) < 4.5
+
     return {
+        "persistentLowMood": persistent_low_mood,
         "summary": {
             "totalEntries": len(entries),
             "analyzedEntries": analyzed_count,
@@ -273,6 +301,81 @@ def get_insights(
             "highlights": writing_style_highlights[-5:] # Latest 5 highlights
         }
     }
+
+
+# --- Weekly AI Review ---
+class WeeklyReviewSchema(BaseModel):
+    narrative: str = Field(description="A warm, honest 2-3 paragraph narrative of the user's week, written directly to them ('you'). Reference specific days.")
+    winsOfTheWeek: list[str] = Field(description="2-4 concrete wins or bright spots pulled from the entries.")
+    challenges: list[str] = Field(description="1-3 recurring difficulties or drains, stated gently but honestly.")
+    recurringThemes: list[str] = Field(description="2-4 themes that appeared across multiple days (short phrases).")
+    moodArc: str = Field(description="One sentence describing how mood moved across the week (e.g. 'Started heavy, lifted after Wednesday').")
+    nextWeekFocus: str = Field(description="1-2 sentences suggesting a single meaningful focus for next week, grounded in this week's patterns.")
+
+@router.get("/api/insights/weekly-review")
+def get_weekly_review(
+    refresh: bool = Query(default=False),
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db)
+):
+    """AI-synthesized narrative review of the trailing 7 days, cached per day."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    week_start = datetime.utcnow() - timedelta(days=7)
+    entries = (
+        db.query(models.JournalEntry)
+        .filter(
+            models.JournalEntry.user_id == user_id,
+            models.JournalEntry.date >= week_start,
+            models.JournalEntry.is_deleted == False,
+        )
+        .order_by(models.JournalEntry.date.asc())
+        .all()
+    )
+
+    if len(entries) < 2:
+        return {"available": False, "entryCount": len(entries),
+                "reason": "Write at least 2 entries this week to unlock your review."}
+
+    # Cache key ties to today + entry count, so the review regenerates when a
+    # new day starts or another entry lands — not on every page visit.
+    prefs = user.preferences or {}
+    cache_key = f"{datetime.utcnow().strftime('%Y-%m-%d')}:{len(entries)}"
+    cached = prefs.get("weekly_review_cache")
+    if cached and cached.get("key") == cache_key and not refresh:
+        return {"available": True, "review": cached["data"], "entryCount": len(entries), "cached": True}
+
+    digest_lines = []
+    for entry in entries:
+        fb = entry.feedback
+        day = entry.date.strftime("%A %b %d")
+        mood = f"mood {fb.mood_score}/10, {fb.sentiment}" if fb and fb.mood_score else "not analyzed"
+        topics = ", ".join(sorted(fb.topics, key=fb.topics.get, reverse=True)[:3]) if fb and fb.topics else ""
+        text = re.sub(r"<[^>]*>?", "", entry.content or "")[:400]
+        digest_lines.append(f"### {day} ({mood}){f' — topics: {topics}' if topics else ''}\n{text}")
+
+    response = _openai_client.beta.chat.completions.parse(
+        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        messages=[
+            {"role": "system", "content": (
+                "You are a reflective journaling coach writing a weekly review for this user. "
+                "Base everything strictly on their entries below — quote or reference real details. "
+                "Be warm and specific; never invent events that aren't in the text."
+            )},
+            {"role": "user", "content": "My journal entries from the past week:\n\n" + "\n\n".join(digest_lines)},
+        ],
+        response_format=WeeklyReviewSchema,
+    )
+    review = response.choices[0].message.parsed.model_dump()
+
+    prefs["weekly_review_cache"] = {"key": cache_key, "data": review}
+    user.preferences = prefs
+    flag_modified(user, "preferences")
+    db.commit()
+
+    return {"available": True, "review": review, "entryCount": len(entries), "cached": False}
 
 
 # --- Open Loop Actions ---

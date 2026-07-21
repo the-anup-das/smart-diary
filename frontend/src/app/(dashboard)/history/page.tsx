@@ -1,6 +1,8 @@
 "use client"
 import * as React from "react"
-import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, BookOpen, FileText, Trash2, AlertTriangle, X } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, BookOpen, FileText, Trash2, AlertTriangle, X, Search } from "lucide-react"
+import { SENTIMENT_STYLES } from "@/lib/mood"
 import { DeleteConfirmationModal } from "@/components/diary/DeleteConfirmationModal"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 import { ReadOnlyEditor } from "@/components/diary/ReadOnlyEditor"
@@ -25,6 +27,7 @@ interface EntryData {
 type ViewMode = "month" | "year"
 
 export default function HistoryPage() {
+  const router = useRouter()
   const [entries, setEntries] = React.useState<EntryData[]>([])
   const [loading, setLoading] = React.useState(true)
   const [expandedId, setExpandedId] = React.useState<string | null>(null)
@@ -38,7 +41,50 @@ export default function HistoryPage() {
   })
   const [currentYear, setCurrentYear] = React.useState(() => new Date().getFullYear())
 
+  // Search state
+  const [searchQ, setSearchQ] = React.useState("")
+  const [searchSentiment, setSearchSentiment] = React.useState("")
+  const [searchMood, setSearchMood] = React.useState("any")
+  const [searchResults, setSearchResults] = React.useState<{ id: string; snippet: string }[] | null>(null)
+  const [searching, setSearching] = React.useState(false)
+  const searchActive = searchQ.trim().length > 0 || searchSentiment !== "" || searchMood !== "any"
+
   const entryRefs = React.useRef<Map<string, HTMLDivElement>>(new Map())
+
+  // Debounced server-side search
+  React.useEffect(() => {
+    if (!searchActive) {
+      setSearchResults(null)
+      return
+    }
+    const moodRanges: Record<string, [number, number]> = { low: [1, 4], mid: [5, 6], high: [7, 10] }
+    const controller = new AbortController()
+    const timer = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const params = new URLSearchParams()
+        if (searchQ.trim()) params.set("q", searchQ.trim())
+        if (searchSentiment) params.set("sentiment", searchSentiment)
+        if (searchMood !== "any") {
+          const [lo, hi] = moodRanges[searchMood]
+          params.set("mood_min", String(lo))
+          params.set("mood_max", String(hi))
+        }
+        const res = await fetch(`/api/entries/search?${params}`, { signal: controller.signal })
+        if (res.ok) {
+          const json = await res.json()
+          setSearchResults((json.results || []).map((r: any) => ({ id: r.id, snippet: r.snippet })))
+        } else {
+          setSearchResults([])
+        }
+      } catch (err: any) {
+        if (err?.name !== "AbortError") setSearchResults([])
+      } finally {
+        setSearching(false)
+      }
+    }, 350)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [searchQ, searchSentiment, searchMood, searchActive])
 
   React.useEffect(() => {
     async function fetchHistory() {
@@ -69,6 +115,13 @@ export default function HistoryPage() {
     return map
   }, [entries])
 
+  // Lookup by id so search hits can reuse the fully-loaded entries
+  const entryById = React.useMemo(() => {
+    const map = new Map<string, EntryData>()
+    for (const e of entries) map.set(e.id, e)
+    return map
+  }, [entries])
+
   // Filter entries for the timeline below calendar
   const filteredEntries = React.useMemo(() => {
     if (viewMode === "year") {
@@ -86,13 +139,38 @@ export default function HistoryPage() {
 
   const handleDayClick = (date: string) => {
     const entry = entryMap.get(date)
-    if (!entry) return
+    if (!entry) {
+      // Empty past day → open the editor in backfill mode for that date
+      const todayStr = new Date().toISOString().slice(0, 10)
+      if (date < todayStr) router.push(`/?date=${date}`)
+      else if (date === todayStr) router.push('/')
+      return
+    }
     setExpandedId(entry.id)
     setTimeout(() => {
       const el = entryRefs.current.get(entry.id)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }, 100)
   }
+
+  // Deep link: /history?date=YYYY-MM-DD (e.g. from chat citation pills) jumps
+  // to that month and expands the entry. window.location avoids the Suspense
+  // boundary useSearchParams requires.
+  const deepLinkHandled = React.useRef(false)
+  React.useEffect(() => {
+    if (deepLinkHandled.current || entries.length === 0) return
+    deepLinkHandled.current = true
+    const date = new URLSearchParams(window.location.search).get('date')
+    const entry = date ? entryMap.get(date) : undefined
+    if (!date || !entry) return
+    const d = new Date(date + 'T00:00:00')
+    setViewMode("month")
+    setCurrentMonth({ year: d.getFullYear(), month: d.getMonth() })
+    setExpandedId(entry.id)
+    setTimeout(() => {
+      entryRefs.current.get(entry.id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 300)
+  }, [entries, entryMap])
 
   const viewModes: { key: ViewMode; label: string }[] = [
     { key: "month", label: "Month" },
@@ -131,6 +209,86 @@ export default function HistoryPage() {
         </div>
       </div>
 
+      {/* Search Bar */}
+      {!loading && entries.length > 0 && (
+        <div className="mb-6 px-2">
+          <div className="flex flex-col md:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="search"
+                value={searchQ}
+                onChange={e => setSearchQ(e.target.value)}
+                placeholder="Search your journal…"
+                aria-label="Search journal entries"
+                className="w-full pl-11 pr-10 py-3 rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-sm text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+              />
+              {searchQ && (
+                <button
+                  onClick={() => setSearchQ("")}
+                  aria-label="Clear search"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 cursor-pointer transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <select
+                value={searchSentiment}
+                onChange={e => setSearchSentiment(e.target.value)}
+                aria-label="Filter by sentiment"
+                className="px-4 py-3 rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-sm text-sm text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
+              >
+                <option value="">Any feeling</option>
+                {Object.keys(SENTIMENT_STYLES).map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                value={searchMood}
+                onChange={e => setSearchMood(e.target.value)}
+                aria-label="Filter by mood level"
+                className="px-4 py-3 rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-sm text-sm text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-pointer"
+              >
+                <option value="any">Any mood</option>
+                <option value="low">Low (1–4)</option>
+                <option value="mid">Balanced (5–6)</option>
+                <option value="high">High (7–10)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Search Results */}
+      {!loading && searchActive && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide px-1">
+            {searching ? "Searching…" : `${searchResults?.length ?? 0} ${(searchResults?.length ?? 0) === 1 ? "match" : "matches"}`}
+            {searchQ.trim() && !searching && <> for “{searchQ.trim()}”</>}
+          </h3>
+          {!searching && (searchResults?.length ?? 0) === 0 && (
+            <p className="text-center text-gray-400 py-10">Nothing found. Try a different word or loosen the filters.</p>
+          )}
+          {(searchResults ?? []).map(hit => {
+            const full = entryById.get(hit.id)
+            if (!full) return null
+            return (
+              <EntryCard
+                key={hit.id}
+                entry={{ ...full, preview: hit.snippet || full.preview }}
+                isExpanded={expandedId === hit.id}
+                onToggle={() => setExpandedId(expandedId === hit.id ? null : hit.id)}
+                onReadFull={() => setSelectedEntry(full)}
+                preferences={preferences}
+                onDelete={() => setConfirmDeleteEntry(full)}
+              />
+            )
+          })}
+        </div>
+      )}
+
       {/* Loading */}
       {loading && (
         <div className="space-y-4 animate-pulse">
@@ -154,7 +312,7 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {!loading && entries.length > 0 && (
+      {!loading && entries.length > 0 && !searchActive && (
         <div className="space-y-8">
           {/* Calendar View */}
           <GlassCard>
@@ -484,6 +642,7 @@ function EntryCard({ entry, isExpanded, onToggle, onReadFull, preferences, onDel
                 onClick={(e) => { e.stopPropagation(); onDelete(entry.id, entry.date) }}
                 className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer mr-1 focus:outline-none focus:ring-2 focus:ring-red-500/40"
                 title="Delete Entry"
+                aria-label={`Delete entry from ${dateLabel}`}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -613,10 +772,11 @@ function FullEntryModal({ entry, onClose, preferences }: {
         </h1>
         <div className="flex items-center space-x-4">
           <span className="text-sm text-gray-400 font-mono tracking-wide">{entry.wordCount} words</span>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-all cursor-pointer"
             title="Close"
+            aria-label="Close full entry"
           >
             <ChevronDown className="w-5 h-5" />
           </button>

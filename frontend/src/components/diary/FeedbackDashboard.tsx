@@ -2,12 +2,30 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash, GitMerge, ArrowRight } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
+import { HelpfulnessVote } from "@/components/ui/HelpfulnessVote"
+import { SupportCard } from "@/components/wellbeing/SupportCard"
+import { BreathingExercise } from "@/components/wellbeing/BreathingExercise"
 
-export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { feedback: any, preferences?: any, onClose?: () => void }) {
+export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrivalMood = null, onInsertTemplate }: { feedback: any, preferences?: any, onClose?: () => void, arrivalMood?: number | null, onInsertTemplate?: (key: string) => void }) {
   const router = useRouter()
   const [creatingDecision, setCreatingDecision] = React.useState(false)
+  const [supportDismissed, setSupportDismissed] = React.useState(false)
 
   if (!feedback) return null;
+
+  // Acute distress: lead with support, not analysis. The reflection stays one
+  // tap away — never locked, never forced.
+  if (feedback.distressFlag && !supportDismissed) {
+    return (
+      <div className="mt-8 max-w-4xl mx-auto w-full pb-20 px-2 lg:px-6 fade-in">
+        <SupportCard
+          region={preferences?.support_region || "international"}
+          customHelpline={preferences?.support_custom || ""}
+          onDismiss={() => setSupportDismissed(true)}
+        />
+      </div>
+    )
+  }
 
   const handleStartDecision = async () => {
     if (!feedback.detectedDecision) return
@@ -97,6 +115,26 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
               })()}
             </div>
             <ProgressBar value={feedback.moodScore * 10} moodScore={feedback.moodScore} />
+            {Array.isArray(feedback.emotionLabels) && feedback.emotionLabels.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-4">
+                <span className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mr-1">Feelings named</span>
+                {feedback.emotionLabels.map((label: string) => (
+                  <span key={label} className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium border border-primary/20 capitalize">
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
+            {arrivalMood != null && feedback.moodScore != null && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                You arrived at {arrivalMood}/10 — your writing reads as {feedback.moodScore}/10.{" "}
+                {feedback.moodScore > arrivalMood
+                  ? "A little lighter for having written."
+                  : feedback.moodScore === arrivalMood
+                  ? "Steady — and showing up counts."
+                  : "A heavy one. Putting it into words still counts."}
+              </p>
+            )}
         </GlassCard>
         )}
 
@@ -116,6 +154,10 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
           </GlassCard>
         )}
       </div>
+
+      {feedback.moodScore != null && feedback.moodScore <= 4 && !feedback.distressFlag && (
+        <LowMoodSupport onInsertTemplate={onInsertTemplate} onCloseDashboard={onClose} />
+      )}
 
       {/* Grammar Corrections */}
       {!preferences?.hide_grammar && Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length > 0 && (
@@ -202,7 +244,75 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose }: { fee
           </div>
         </GlassCard>
       )}
+
+      <HelpfulnessVote kind="reflection" className="justify-center py-2" />
     </div>
+  )
+}
+
+/** Shown on low-mood days (never during acute distress — SupportCard owns that):
+ *  a past bright spot to revisit, gentler templates, and a one-minute breather. */
+function LowMoodSupport({ onInsertTemplate, onCloseDashboard }: { onInsertTemplate?: (key: string) => void, onCloseDashboard?: () => void }) {
+  const [brightSpot, setBrightSpot] = React.useState<any>(null)
+  const [breathing, setBreathing] = React.useState(false)
+
+  React.useEffect(() => {
+    fetch("/api/entries/bright-spot")
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => { if (data?.found) setBrightSpot(data) })
+      .catch(() => {})
+  }, [])
+
+  const suggestTemplate = (key: string) => {
+    onInsertTemplate?.(key)
+    onCloseDashboard?.()
+  }
+
+  return (
+    <GlassCard>
+      {breathing && <BreathingExercise onClose={() => setBreathing(false)} />}
+      <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Be extra gentle with yourself today</h3>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        Heavy days happen. A few things that tend to help:
+      </p>
+
+      {brightSpot && (
+        <button
+          onClick={() => (window.location.href = `/history?date=${brightSpot.date}`)}
+          className="w-full text-left p-4 rounded-xl bg-amber-500/5 border border-amber-500/20 hover:border-amber-500/40 transition-colors cursor-pointer mb-3"
+        >
+          <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400 font-semibold">
+            A good day worth revisiting · {brightSpot.displayDate}
+          </span>
+          <p className="text-sm text-gray-700 dark:text-gray-300 mt-1.5 line-clamp-2 italic">"{brightSpot.snippet}…"</p>
+        </button>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => setBreathing(true)}
+          className="px-3.5 py-2 rounded-xl bg-sky-500/10 text-sky-700 dark:text-sky-300 text-xs font-medium hover:bg-sky-500/20 transition-colors cursor-pointer"
+        >
+          60-second breather
+        </button>
+        {onInsertTemplate && (
+          <>
+            <button
+              onClick={() => suggestTemplate("self-compassion")}
+              className="px-3.5 py-2 rounded-xl bg-black/5 dark:bg-white/5 text-gray-600 dark:text-gray-300 text-xs font-medium hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              Add a Self-Compassion Break
+            </button>
+            <button
+              onClick={() => suggestTemplate("worry-dump")}
+              className="px-3.5 py-2 rounded-xl bg-black/5 dark:bg-white/5 text-gray-600 dark:text-gray-300 text-xs font-medium hover:bg-black/10 dark:hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              Park worries in a Worry Dump
+            </button>
+          </>
+        )}
+      </div>
+    </GlassCard>
   )
 }
 

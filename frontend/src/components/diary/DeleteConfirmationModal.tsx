@@ -43,12 +43,16 @@ export function DeleteConfirmationModal({ entry, onCancel, onConfirm }: DeleteCo
       onClick={onCancel}
     >
       <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={`Delete entry from ${dateLabel}`}
         className="relative w-full max-w-md mx-4 rounded-2xl bg-white dark:bg-gray-900 border border-black/10 dark:border-white/10 shadow-2xl p-6 fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close button */}
         <button
           onClick={onCancel}
+          aria-label="Close"
           className="absolute top-4 right-4 p-1.5 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/5 transition-all cursor-pointer"
         >
           <X className="w-4 h-4" />

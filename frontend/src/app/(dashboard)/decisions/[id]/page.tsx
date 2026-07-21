@@ -2,6 +2,7 @@
 import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Sparkles, AlertCircle, Bot, Zap, Clock, TrendingUp, CheckCircle2 } from "lucide-react"
+import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
 
 interface Decision {
   id: string
@@ -104,7 +105,21 @@ export default function DecisionCanvasPage() {
     }
   }
 
-  if (loading) return <div className="p-8 text-center animate-pulse text-gray-500">Loading Canvas...</div>
+  if (loading) return (
+    <div className="w-full pt-6 px-4 lg:px-8 animate-pulse" aria-busy="true" aria-label="Loading decision canvas">
+      <div className="flex items-center space-x-4 mb-8">
+        <div className="w-9 h-9 rounded-full bg-black/5 dark:bg-white/5" />
+        <div className="space-y-2">
+          <div className="h-3 w-32 rounded bg-black/5 dark:bg-white/5" />
+          <div className="h-8 w-72 rounded-lg bg-black/5 dark:bg-white/5" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="h-64 rounded-2xl bg-black/5 dark:bg-white/5" />
+        <div className="lg:col-span-2 h-[500px] rounded-2xl bg-black/5 dark:bg-white/5" />
+      </div>
+    </div>
+  )
   if (!decision) return <div className="p-8 text-center text-red-500">Decision not found</div>
 
   return (
@@ -195,12 +210,15 @@ export default function DecisionCanvasPage() {
             </div>
           ) : simulating ? (
             <div className="h-full flex flex-col items-center justify-center p-10 rounded-2xl border border-black/5 dark:border-white/10 bg-white/50 dark:bg-black/20 backdrop-blur-xl shadow-lg">
-              <div className="relative">
-                <div className="absolute inset-0 bg-indigo-500 rounded-full blur-xl animate-pulse opacity-50" />
-                <Bot className="w-12 h-12 text-indigo-500 relative z-10 animate-bounce" />
-              </div>
-              <h3 className="text-lg font-medium mt-6 text-gray-900 dark:text-gray-100">Agent is thinking...</h3>
-              <p className="text-sm text-gray-500 mt-2">Searching your diary memories and loading the best framework.</p>
+              <ReflectingIndicator
+                messages={[
+                  "Mapping your options…",
+                  "Searching your journal memories…",
+                  "Evaluating each path against what matters to you…",
+                  "Looking for blindspots…",
+                  "Writing an honest recommendation…",
+                ]}
+              />
             </div>
           ) : (
             <div className="space-y-6">

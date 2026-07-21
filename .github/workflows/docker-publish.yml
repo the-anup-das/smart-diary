@@ -10,12 +10,45 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "base=$PREV_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ steps.prev_tag.outputs.base }}
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
   build-and-push:
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend, frontend]
     
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      needs.changes.outputs[matrix.component] == 'true'
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

@@ -65,6 +65,8 @@ class FeedbackReportSchema(BaseModel):
     repetitiveWords: list[str] = Field(description="List of words or short phrases overused in this entry (3-5 items).")
     repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
     detectedDecision: str | None = Field(default=None, description="If the user is struggling with a specific decision (e.g., 'Should I quit my job?'), summarize the topic here. Otherwise null.")
+    emotionLabels: list[str] = Field(description="1-3 precise emotion words the writer is expressing (e.g. 'overwhelmed', 'wistful', 'resentful', 'proud'). Granular words, not generic ones like 'bad' or 'sad' unless truly the best fit.")
+    distressFlag: bool = Field(description="True ONLY when the entry contains clear signals of self-harm, suicidal thoughts, or acute crisis (e.g. hopelessness about being alive, wanting to disappear or end things). Ordinary sadness, stress, anger, or venting must be False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
 
 
@@ -110,7 +112,10 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         "2. Repetitive Wording: Identify overused words. Suggest variety.\n"
         "3. Energy: Extract chargers/drainers. Identify controllables vs uncontrollables. "
         "Provide a 1-sentence reframe/tip for each. Give a rumination coaching line. "
-        "Generate 3 topic-tailored micro-actions and a 'tomorrowFocus' strategy."
+        "Generate 3 topic-tailored micro-actions and a 'tomorrowFocus' strategy.\n"
+        "4. Emotions: name 1-3 precise emotion words the writer expresses (granularity over generic terms).\n"
+        "5. Safety: set distressFlag true ONLY for clear self-harm/suicidal/acute-crisis signals — "
+        "never for ordinary sadness, stress, or venting."
     )
     custom_persona = preferences.get("custom_persona_prompt", "")
     if custom_persona:
@@ -159,6 +164,8 @@ def _build_response(feedback, cached: bool = False):
             "selfFocusFeedback": feedback.self_focus_feedback,
             "repetitiveWording": feedback.repetitive_wording,
             "detectedDecision": feedback.detected_decision,
+            "emotionLabels": feedback.emotion_labels,
+            "distressFlag": feedback.distress_flag,
         }
     }
 
@@ -290,6 +297,8 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
                 "feedback": parsed.repetitiveWordingFeedback
             },
             "detected_decision": parsed.detectedDecision,
+            "emotion_labels": parsed.emotionLabels[:3],
+            "distress_flag": parsed.distressFlag,
             "energy_data": energy_data,
             "prompt_tokens": usage["prompt_tokens"],
             "completion_tokens": usage["completion_tokens"],

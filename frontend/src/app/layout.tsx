@@ -2,6 +2,7 @@
 import { Inter, Merriweather } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { MoodProvider } from "@/components/MoodProvider";
+import { UpdatePrompt } from "@/components/UpdatePrompt";
 import "./globals.css";
 
 const inter = Inter({
@@ -63,6 +64,7 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <MoodProvider>
             {children}
+            <UpdatePrompt />
           </MoodProvider>
         </ThemeProvider>
       </body>

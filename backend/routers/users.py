@@ -183,3 +183,26 @@ def import_data(payload: ImportPayload, user_id: str = Depends(verify_session), 
 
     db.commit()
     return {"success": True, "entries_imported": len(payload.entries), "loops_imported": len(payload.openLoops)}
+
+class MoodCheckin(BaseModel):
+    mood: int  # 1-10, how the user feels *before* writing
+
+@router.post("/api/users/checkin")
+def mood_checkin(payload: MoodCheckin, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Record arrival mood for today — compared against the post-writing AI
+    mood score to show whether journaling actually lifts the writer."""
+    if not 1 <= payload.mood <= 10:
+        raise HTTPException(status_code=422, detail="mood must be between 1 and 10")
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    from datetime import datetime
+    prefs = dict(user.preferences or {})
+    moods = dict(prefs.get("arrival_moods", {}))
+    moods[datetime.utcnow().strftime("%Y-%m-%d")] = payload.mood
+    # Keep only the most recent 30 days
+    prefs["arrival_moods"] = dict(sorted(moods.items())[-30:])
+    user.preferences = prefs
+    db.commit()
+    return {"success": True}

@@ -20,24 +20,30 @@ export default function DecisionsLedgerPage() {
   const [creating, setCreating] = React.useState(false)
   const [showModal, setShowModal] = React.useState(false)
   const [topic, setTopic] = React.useState("")
+  const [loadError, setLoadError] = React.useState(false)
+  const [createError, setCreateError] = React.useState("")
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
 
-  React.useEffect(() => {
-    async function fetchDecisions() {
-      try {
-        const res = await fetch('/api/decisions')
-        if (res.ok) {
-          const json = await res.json()
-          setDecisions(json)
-        }
-      } catch (e) {
-        console.error(e)
-      } finally {
-        setLoading(false)
+  const fetchDecisions = React.useCallback(async () => {
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const res = await fetch('/api/decisions')
+      if (res.ok) {
+        const json = await res.json()
+        setDecisions(json)
+      } else {
+        setLoadError(true)
       }
+    } catch (e) {
+      console.error(e)
+      setLoadError(true)
+    } finally {
+      setLoading(false)
     }
-    fetchDecisions()
   }, [])
+
+  React.useEffect(() => { fetchDecisions() }, [fetchDecisions])
 
   // Focus textarea when modal opens
   React.useEffect(() => {
@@ -47,6 +53,7 @@ export default function DecisionsLedgerPage() {
   const handleNewDecision = async () => {
     if (!topic.trim()) return
     setCreating(true)
+    setCreateError("")
     try {
       const res = await fetch('/api/decisions', {
         method: 'POST',
@@ -56,9 +63,12 @@ export default function DecisionsLedgerPage() {
       if (res.ok) {
         const data = await res.json()
         router.push(`/decisions/${data.id}`)
+      } else {
+        setCreateError("Couldn't create the decision. Please try again.")
       }
     } catch (e) {
       console.error(e)
+      setCreateError("Could not reach the server. Check your connection and try again.")
     } finally {
       setCreating(false)
     }
@@ -102,6 +112,18 @@ export default function DecisionsLedgerPage() {
         <div className="space-y-4 animate-pulse">
           <div className="h-32 rounded-2xl bg-black/5 dark:bg-white/5" />
           <div className="h-32 rounded-2xl bg-black/5 dark:bg-white/5" />
+        </div>
+      ) : loadError ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <p className="text-sm font-medium text-red-500 dark:text-red-400 mb-4" role="alert">
+            Couldn't load your decisions. The backend may be unreachable.
+          </p>
+          <button
+            onClick={fetchDecisions}
+            className="px-5 py-2 rounded-xl bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-600 transition-colors cursor-pointer"
+          >
+            Try again
+          </button>
         </div>
       ) : (
         <div className="space-y-12">
@@ -156,7 +178,12 @@ export default function DecisionsLedgerPage() {
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
 
           {/* Sheet */}
-          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-black/10 dark:border-white/10 p-6 space-y-5">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="New decision"
+            className="relative w-full max-w-lg bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-black/10 dark:border-white/10 p-6 space-y-5"
+          >
             <div>
               <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">What decision are you wrestling with?</h2>
               <p className="text-sm text-gray-500 mt-1">Be specific — the more context you give, the better the analysis.</p>
@@ -171,6 +198,10 @@ export default function DecisionsLedgerPage() {
               rows={4}
               className="w-full p-4 text-sm rounded-xl bg-black/5 dark:bg-white/5 border border-transparent focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-all text-gray-900 dark:text-gray-100 placeholder:text-gray-400"
             />
+
+            {createError && (
+              <p className="text-sm font-medium text-red-500 dark:text-red-400" role="alert">{createError}</p>
+            )}
 
             <div className="flex items-center justify-end gap-3">
               <button

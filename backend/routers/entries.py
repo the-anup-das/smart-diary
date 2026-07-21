@@ -10,45 +10,73 @@ router = APIRouter()
 
 class EntryUpdate(BaseModel):
     content: str
+    date: str | None = None  # YYYY-MM-DD; omitted = today. Past dates allowed (backfill).
+
+
+def _parse_entry_date(value: str) -> datetime:
+    """Validate a backdate: well-formed and not in the future (UTC days)."""
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="date must be a YYYY-MM-DD date.")
+    if parsed.date() > datetime.utcnow().date():
+        raise HTTPException(status_code=422, detail="Cannot write an entry for a future date.")
+    return parsed
+
+
+def _day_bounds(day: datetime):
+    start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, day.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+
+def _entry_for_day(db: Session, user_id: str, day: datetime):
+    start, end = _day_bounds(day)
+    return db.query(models.JournalEntry).filter(
+        models.JournalEntry.user_id == user_id,
+        models.JournalEntry.date >= start,
+        models.JournalEntry.date <= end,
+        models.JournalEntry.is_deleted == False
+    ).first()
+
 
 @router.get("/api/entries/today")
 def get_today_entry(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    entry = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id,
-        models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end,
-        models.JournalEntry.is_deleted == False
-    ).first()
-    
+    entry = _entry_for_day(db, user_id, datetime.utcnow())
+    if not entry:
+        return {"content": "", "id": None}
+    return {"content": entry.content, "id": entry.id}
+
+@router.get("/api/entries/by-date")
+def get_entry_by_date(date: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Load the entry for a specific past day (backfill editing)."""
+    entry = _entry_for_day(db, user_id, _parse_entry_date(date))
     if not entry:
         return {"content": "", "id": None}
     return {"content": entry.content, "id": entry.id}
 
 @router.post("/api/entries")
 def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = datetime.utcnow().replace(hour=23, minute=59, second=59, microsecond=999999)
-    
-    entry = db.query(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id,
-        models.JournalEntry.date >= today_start,
-        models.JournalEntry.date <= today_end,
-        models.JournalEntry.is_deleted == False
-    ).first()
-    
+    if data.date:
+        target_day = _parse_entry_date(data.date)
+        # Anchor mid-day so the timestamp stays inside the day window in UTC
+        create_stamp = target_day.replace(hour=12)
+    else:
+        target_day = datetime.utcnow()
+        create_stamp = None  # model default (now)
+
+    entry = _entry_for_day(db, user_id, target_day)
     if entry:
         entry.content = data.content
         entry.updated_at = datetime.utcnow()
         db.commit()
     else:
         new_entry = models.JournalEntry(user_id=user_id, content=data.content)
+        if create_stamp:
+            new_entry.date = create_stamp
         db.add(new_entry)
         db.commit()
         entry = new_entry
-        
+
     return {"success": True, "id": entry.id}
 
 @router.get("/api/entries/history")
@@ -160,6 +188,121 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
         }
     }
 
+@router.get("/api/entries/search")
+def search_entries(
+    q: str = "",
+    mood_min: int = None,
+    mood_max: int = None,
+    sentiment: str = None,
+    topic: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """Full-text search over entries with optional mood/sentiment/topic/date filters."""
+    import re
+
+    query = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
+    )
+    q = (q or "").strip()
+    if q:
+        # Escape LIKE wildcards so "100%" or "_" match literally instead of everything.
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.filter(models.JournalEntry.content.ilike(f"%{escaped}%", escape="\\"))
+
+    def _parse_date(value: str, label: str) -> datetime:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"{label} must be a YYYY-MM-DD date.")
+
+    if date_from:
+        query = query.filter(models.JournalEntry.date >= _parse_date(date_from, "date_from"))
+    if date_to:
+        query = query.filter(models.JournalEntry.date <= _parse_date(date_to, "date_to").replace(hour=23, minute=59, second=59))
+
+    entries = query.order_by(models.JournalEntry.date.desc()).limit(500).all()
+
+    # Feedback-based filters run in Python: per-user entry counts are tiny (one
+    # entry a day), and the topics column is generic JSON we can't index into portably.
+    results = []
+    for entry in entries:
+        fb = entry.feedback
+        if mood_min is not None and (not fb or fb.mood_score is None or fb.mood_score < mood_min):
+            continue
+        if mood_max is not None and (not fb or fb.mood_score is None or fb.mood_score > mood_max):
+            continue
+        if sentiment and (not fb or fb.sentiment != sentiment):
+            continue
+        if topic and (not fb or not fb.topics or topic not in fb.topics):
+            continue
+
+        raw = re.sub(r"<[^>]*>?", "", entry.content or "")
+        # Build a snippet centred on the first match so users see the hit in context
+        snippet = raw[:200].strip()
+        if q:
+            pos = raw.lower().find(q.lower())
+            if pos >= 0:
+                start = max(0, pos - 90)
+                end = min(len(raw), pos + len(q) + 90)
+                snippet = ("…" if start > 0 else "") + raw[start:end].strip() + ("…" if end < len(raw) else "")
+
+        results.append({
+            "id": entry.id,
+            "date": entry.date.strftime("%Y-%m-%d"),
+            "displayDate": entry.date.strftime("%B %d, %Y"),
+            "snippet": snippet,
+            "content": entry.content,
+            "moodScore": fb.mood_score if fb else None,
+            "sentiment": fb.sentiment if fb else None,
+            "topics": fb.topics if fb else None,
+        })
+        if len(results) >= 50:
+            break
+
+    return {"results": results, "total": len(results)}
+
+@router.get("/api/entries/on-this-day")
+def get_on_this_day(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Resurface entries written exactly 1 week / 1 month / 6 months / 1 year ago."""
+    import re
+    today = datetime.utcnow().date()
+    lookbacks = [
+        ("1 week ago", today - timedelta(days=7)),
+        ("1 month ago", today - timedelta(days=30)),
+        ("6 months ago", today - timedelta(days=182)),
+        ("1 year ago", today - timedelta(days=365)),
+    ]
+
+    memories = []
+    for label, target in lookbacks:
+        day_start = datetime(target.year, target.month, target.day)
+        day_end = day_start + timedelta(days=1)
+        entry = (
+            db.query(models.JournalEntry)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date >= day_start,
+                models.JournalEntry.date < day_end,
+            )
+            .first()
+        )
+        if entry:
+            raw = re.sub(r"<[^>]*>?", "", entry.content or "")
+            memories.append({
+                "id": entry.id,
+                "label": label,
+                "date": entry.date.strftime("%B %d, %Y"),
+                "preview": raw[:280].strip() + ("…" if len(raw) > 280 else ""),
+                "moodScore": entry.feedback.mood_score if entry.feedback else None,
+            })
+
+    return {"memories": memories}
+
 @router.delete("/api/entries/{id}")
 def soft_delete_entry(id: str, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
     entry = db.query(models.JournalEntry).filter(models.JournalEntry.id == id, models.JournalEntry.user_id == user_id).first()
@@ -170,3 +313,36 @@ def soft_delete_entry(id: str, user_id: str = Depends(verify_session), db: Sessi
     entry.deleted_at = datetime.utcnow()
     db.commit()
     return {"success": True}
+
+@router.get("/api/entries/bright-spot")
+def get_bright_spot(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """A randomly chosen past high-mood entry — surfaced on heavy days as a
+    savoring exercise ('a good day worth revisiting')."""
+    from sqlalchemy import func as sa_func
+    import re as _re
+
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    for threshold in (8, 7):
+        row = (
+            db.query(models.JournalEntry, models.FeedbackReport)
+            .join(models.FeedbackReport, models.FeedbackReport.journal_entry_id == models.JournalEntry.id)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date < today_start,
+                models.FeedbackReport.mood_score >= threshold,
+            )
+            .order_by(sa_func.random())
+            .first()
+        )
+        if row:
+            entry, fb = row
+            text = _re.sub(r"<[^>]*>?", "", entry.content or "")
+            return {
+                "found": True,
+                "date": entry.date.strftime("%Y-%m-%d"),
+                "displayDate": entry.date.strftime("%B %d, %Y"),
+                "moodScore": fb.mood_score,
+                "snippet": text[:220].strip(),
+            }
+    return {"found": False}
