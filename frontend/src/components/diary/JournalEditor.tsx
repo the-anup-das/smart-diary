@@ -10,6 +10,7 @@ import { MorningIntentions } from "./MorningIntentions"
 import { CheckCircle2, Trash, WifiOff } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
+import { VoiceRecorder } from "./VoiceRecorder"
 
 export function JournalEditor({ initialContent = "", initialId = null }: { initialContent?: string, initialId?: string | null }) {
   const isOnline = useNetworkStatus()
@@ -23,7 +24,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
   const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
+  const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
+  const [sttEnabled, setSttEnabled] = React.useState(false)
+  const [sttModel, setSttModel] = React.useState<string>("")
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  const typeQueueRef = React.useRef<string[]>([])
+  const isTypingRef = React.useRef(false)
 
   React.useEffect(() => {
     fetch("/api/users/me")
@@ -31,6 +37,20 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
       .then(data => {
         if (!data.detail && data.preferences) {
           setPreferences(data.preferences)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // Check if STT is configured and kick off a background model warm-up
+  React.useEffect(() => {
+    fetch("/api/voice/status")
+      .then(res => res.json())
+      .then(data => {
+        if (data.enabled) {
+          setSttEnabled(true)
+          if (data.model) setSttModel(data.model)
+          fetch("/api/voice/warm", { method: "POST" }).catch(() => {})
         }
       })
       .catch(() => {})
@@ -215,6 +235,38 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
     }
   }
 
+  const processTypeQueue = React.useCallback(() => {
+    if (isTypingRef.current || typeQueueRef.current.length === 0 || !editor) return
+    isTypingRef.current = true
+
+    const textToType = typeQueueRef.current.shift() || ""
+    const chars = textToType.split("")
+    let i = 0
+
+    const interval = setInterval(() => {
+      editor.commands.focus('end')
+      editor.commands.insertContent(chars[i])
+      i++
+      
+      if (i >= chars.length) {
+        clearInterval(interval)
+        isTypingRef.current = false
+        if (typeQueueRef.current.length > 0) {
+          processTypeQueue()
+        }
+      }
+    }, 20) // 20ms per character typing speed
+  }, [editor])
+
+  const handleTranscript = React.useCallback((text: string) => {
+    if (!editor || !text.trim()) return
+    const isEmpty = editor.getText().trim().length === 0
+    const textToInsert = isEmpty ? text : ' ' + text
+    
+    typeQueueRef.current.push(textToInsert)
+    processTypeQueue()
+  }, [editor, processTypeQueue])
+
   const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
 
   return (
@@ -232,6 +284,15 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
             >
               <Trash className="w-4 h-4" />
             </button>
+          )}
+          {/* Voice recorder — only shown when STT_BASE_URL is configured */}
+          {sttEnabled && (
+            <VoiceRecorder
+              onTranscript={handleTranscript}
+              onRecordingChange={setIsVoiceRecording}
+              disabled={!isOnline}
+              modelName={sttModel}
+            />
           )}
           {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
             <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
@@ -279,7 +340,11 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
            onClick={handleSaveAndReflect}
            disabled={!editor || isProcessing || wordCount < 3}
            suppressHydrationWarning
-           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ring-primary/20 bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
+           className={`shadow-[0_8px_30px_rgba(139,92,246,0.4)] ring-4 ${
+             isVoiceRecording
+               ? 'ring-red-500/40 shadow-[0_8px_30px_rgba(239,68,68,0.35)]'
+               : 'ring-primary/20'
+           } bg-gradient-to-br from-primary to-violet-600 text-white border border-white/20 flex items-center justify-center cursor-pointer group disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-1 active:scale-95 transition-all duration-300 ease-out h-[56px] rounded-full overflow-hidden ${isProcessing ? 'w-[220px]' : 'w-[56px] hover:w-[200px]'}`}
          >
            {isProcessing ? (
              <span className="flex items-center space-x-2 px-4">
