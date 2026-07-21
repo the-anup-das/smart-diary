@@ -1,7 +1,8 @@
 "use client"
 import React from "react"
-import { BrainCircuit } from "lucide-react"
+import { BrainCircuit, Wind } from "lucide-react"
 import { InfoTooltip } from "@/components/ui/InfoTooltip"
+import { BreathingExercise } from "@/components/wellbeing/BreathingExercise"
 
 interface OverthinkingMeterProps {
   level: "low" | "moderate" | "high" | string
@@ -9,6 +10,7 @@ interface OverthinkingMeterProps {
 }
 
 export function OverthinkingMeter({ level, coaching }: OverthinkingMeterProps) {
+  const [breathing, setBreathing] = React.useState(false)
   let indicatorColor = "bg-green-500"
   let bgColor = "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20"
   let displayLevel = "Low"
@@ -43,7 +45,16 @@ export function OverthinkingMeter({ level, coaching }: OverthinkingMeterProps) {
         <p className="text-muted-foreground text-sm italic">
           "{coaching || "Your mental clarity looks good today. Keep focusing on what's in your control."}"
         </p>
+        {level.toLowerCase() !== "low" && (
+          <button
+            onClick={() => setBreathing(true)}
+            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 text-sky-700 dark:text-sky-300 text-xs font-medium hover:bg-sky-500/20 transition-colors cursor-pointer"
+          >
+            <Wind className="w-3.5 h-3.5" /> Interrupt the loop — 60-second breather
+          </button>
+        )}
       </div>
+      {breathing && <BreathingExercise onClose={() => setBreathing(false)} />}
     </div>
   )
 }

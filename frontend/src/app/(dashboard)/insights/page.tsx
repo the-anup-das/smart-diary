@@ -31,6 +31,7 @@ interface InsightsData {
     topSentiment: string
     currentStreak: number
   }
+  persistentLowMood?: boolean
   timeline: any[]
   topicAggregation: Record<string, number>
   sentimentDistribution: Record<string, number>
@@ -210,6 +211,8 @@ export default function InsightsPage() {
             <StreakCard streak={data.summary.currentStreak} />
           </div>
 
+          {data.persistentLowMood && <CareNudge />}
+
           {/* Mood & Grammar Timeline */}
           <GlassCard>
             <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center space-x-2">
@@ -355,6 +358,40 @@ function MoodStatCard({ avgMood, moodTrend }: { avgMood: number; moodTrend: numb
 }
 
 // --- Streak Card with Animated Fire ---
+// Sustained-low-mood care nudge: framed as information, never as diagnosis or
+// failure. Dismissal is respected for 30 days.
+function CareNudge() {
+  const [dismissed, setDismissed] = React.useState(true)
+
+  React.useEffect(() => {
+    const at = localStorage.getItem("care_nudge_dismissed_at")
+    setDismissed(!!at && Date.now() - Number(at) < 30 * 24 * 3600 * 1000)
+  }, [])
+
+  if (dismissed) return null
+
+  return (
+    <div className="p-6 rounded-2xl bg-gradient-to-br from-sky-500/10 to-violet-500/10 border border-sky-500/25 shadow-lg fade-in" role="region" aria-label="A gentle note">
+      <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">A gentle observation</h3>
+      <p className="text-sm text-gray-600 dark:text-gray-300 mt-2 leading-relaxed max-w-2xl">
+        Your entries have been carrying a low mood for a couple of weeks now. That's not a
+        failure — it's information. Talking it through with a professional is a reasonable
+        next step, the same way you'd see a doctor about a cough that won't go away.
+        This journal stays with you either way.
+      </p>
+      <button
+        onClick={() => {
+          localStorage.setItem("care_nudge_dismissed_at", String(Date.now()))
+          setDismissed(true)
+        }}
+        className="mt-4 text-xs font-medium text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
+      >
+        Thanks — noted
+      </button>
+    </div>
+  )
+}
+
 function StreakCard({ streak }: { streak: number }) {
   const intensity = Math.min(streak / 10, 1)
   const fireSize = 1.5 + intensity * 1.5
@@ -384,13 +421,23 @@ function StreakCard({ streak }: { streak: number }) {
               animation: streak >= 1 ? `fireFlicker ${pulseSpeed} ease-in-out infinite` : 'none',
             }}
           >
-            🔥
+            {streak === 0 ? "🌱" : "🔥"}
           </span>
         </div>
-        <div>
-          <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">{streak}</p>
-          <p className="text-xs text-gray-400">{streak === 1 ? "day" : "days"}</p>
-        </div>
+        {streak === 0 ? (
+          /* No guilt for a lapse — self-compassion keeps habits alive, shame kills them */
+          <div>
+            <p className="text-base font-semibold text-gray-900 dark:text-gray-100">Welcome back</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Your journal missed you — <a href="/" className="text-primary hover:underline">today's page is open</a>.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">{streak}</p>
+            <p className="text-xs text-gray-400">{streak === 1 ? "day" : "days"}</p>
+          </div>
+        )}
       </div>
       <style>{`
         @keyframes fireFlicker {

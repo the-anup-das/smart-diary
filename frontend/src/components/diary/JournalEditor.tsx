@@ -13,7 +13,8 @@ import { CheckCircle2, Trash, WifiOff, Maximize2, Minimize2 } from "lucide-react
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
 import { VoiceRecorder } from "./VoiceRecorder"
-import { TemplatePicker } from "./TemplatePicker"
+import { TemplatePicker, TEMPLATES } from "./TemplatePicker"
+import { MoodCheckin } from "@/components/wellbeing/MoodCheckin"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
 
 const REFLECTING_MESSAGES = [
@@ -60,6 +61,8 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
   const [currentEntryId, setCurrentEntryId] = React.useState<string | null>(initialId)
   const [showIntentions, setShowIntentions] = React.useState(initialContent.length < 15 && !entryDate)
   const [pendingDrafts, setPendingDrafts] = React.useState(0)
+  const [prefsLoaded, setPrefsLoaded] = React.useState(false)
+  const [arrivalMood, setArrivalMood] = React.useState<number | null>(null)
   const [preferences, setPreferences] = React.useState<any>({})
   const [showDeleteModal, setShowDeleteModal] = React.useState(false)
   const [isVoiceRecording, setIsVoiceRecording] = React.useState(false)
@@ -75,10 +78,32 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       .then(data => {
         if (!data.detail && data.preferences) {
           setPreferences(data.preferences)
+          const today = new Date().toISOString().slice(0, 10)
+          setArrivalMood(data.preferences.arrival_moods?.[today] ?? null)
         }
+        setPrefsLoaded(true)
       })
-      .catch(() => {})
+      .catch(() => setPrefsLoaded(true))
   }, [])
+
+  // Pennebaker expressive-writing program: next day (1-4) or null when done
+  const expressiveDaysDone: string[] = preferences?.expressive?.days_done || []
+  const programDay = expressiveDaysDone.length < 4 ? expressiveDaysDone.length + 1 : null
+
+  const markProgramDay = React.useCallback(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (expressiveDaysDone.includes(today)) return
+    const newPrefs = {
+      ...preferences,
+      expressive: { days_done: [...expressiveDaysDone, today] },
+    }
+    setPreferences(newPrefs)
+    fetch("/api/users/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: newPrefs }),
+    }).catch(() => {})
+  }, [preferences, expressiveDaysDone])
 
   // Check if STT is configured and kick off a background model warm-up
   React.useEffect(() => {
@@ -189,6 +214,13 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       }, 1500) 
     }
   })
+
+  const insertTemplateByKey = React.useCallback((key: string) => {
+    const template = TEMPLATES.find(t => t.key === key)
+    if (!template || !editor) return
+    editor.commands.insertContentAt(editor.state.doc.content.size, template.html)
+    editor.commands.focus('end')
+  }, [editor])
 
   async function handleSaveAndReflect() {
     if (!editor) return;
@@ -361,6 +393,8 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
               editor.commands.focus('end')
               setShowIntentions(false)
             }}
+            programDay={isBackdate ? null : programDay}
+            onProgramInsert={markProgramDay}
           />
           <button
             onClick={() => setZenMode(z => !z)}
@@ -413,6 +447,10 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
         </div>
       </div>
       
+      {!zenMode && !isBackdate && prefsLoaded && arrivalMood === null && wordCount < 15 && !feedbackData && (
+        <MoodCheckin onCheckin={setArrivalMood} />
+      )}
+
       {!zenMode && !isBackdate && (
         <>
           <DecisionNudge />
@@ -483,7 +521,13 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
         </div>
       )}
 
-      <FeedbackDashboard feedback={feedbackData} preferences={preferences} onClose={() => setFeedbackData(null)} />
+      <FeedbackDashboard
+        feedback={feedbackData}
+        preferences={preferences}
+        onClose={() => setFeedbackData(null)}
+        arrivalMood={arrivalMood}
+        onInsertTemplate={insertTemplateByKey}
+      />
 
       {showDeleteModal && (
         <DeleteConfirmationModal

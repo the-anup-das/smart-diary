@@ -11,8 +11,21 @@ interface Template {
   html: string
 }
 
+/** Pennebaker expressive-writing protocol: 15-20 minutes on the same difficult
+ *  experience, four days in a row — the most-studied journaling intervention. */
+export const EXPRESSIVE_PROGRAM: string[] = [
+  "<h2>Expressive writing — day 1 of 4</h2>" +
+    "<p><em>For the next 15–20 minutes, write your deepest thoughts and feelings about something difficult that is affecting your life. Don't worry about grammar or structure — just keep writing. If it becomes too much, it's okay to stop; this should feel challenging, not overwhelming.</em></p><p></p>",
+  "<h2>Expressive writing — day 2 of 4</h2>" +
+    "<p><em>Return to the same experience. Today, go a layer deeper: how has it shaped how you see yourself, the people around you, your past and your future?</em></p><p></p>",
+  "<h2>Expressive writing — day 3 of 4</h2>" +
+    "<p><em>Same experience, different angle: what parts of it are you still holding? What would you say about it to someone you completely trust?</em></p><p></p>",
+  "<h2>Expressive writing — day 4 of 4</h2>" +
+    "<p><em>Last day. Step back: what has this experience taught you? What do you want to take from it, and what are you ready to set down? Try to give the story an ending — even a provisional one.</em></p><p></p>",
+]
+
 /** Evidence-based guided structures, inserted as editable scaffolding. */
-const TEMPLATES: Template[] = [
+export const TEMPLATES: Template[] = [
   {
     key: "three-good-things",
     name: "Three Good Things",
@@ -100,7 +113,16 @@ const TEMPLATES: Template[] = [
   },
 ]
 
-export function TemplatePicker({ onInsert }: { onInsert: (html: string) => void }) {
+export function TemplatePicker({
+  onInsert,
+  programDay = null,
+  onProgramInsert,
+}: {
+  onInsert: (html: string) => void
+  /** Next expressive-writing day (1-4), or null when finished/unavailable */
+  programDay?: number | null
+  onProgramInsert?: () => void
+}) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -126,6 +148,26 @@ export function TemplatePicker({ onInsert }: { onInsert: (html: string) => void 
             <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-gray-400">
               Guided templates
             </p>
+            {programDay !== null && programDay >= 1 && programDay <= 4 && (
+              <button
+                role="menuitem"
+                onClick={() => {
+                  onInsert(EXPRESSIVE_PROGRAM[programDay - 1])
+                  onProgramInsert?.()
+                  setOpen(false)
+                }}
+                className="w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left bg-primary/5 border border-primary/20 hover:bg-primary/10 transition-colors cursor-pointer mb-1"
+              >
+                <Feather className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">Expressive Writing</span>
+                    <span className="text-[10px] text-primary font-semibold uppercase tracking-wide flex-shrink-0">Day {programDay} of 4</span>
+                  </span>
+                  <span className="block text-xs text-gray-500 truncate">Pennebaker protocol — one hard thing, four days</span>
+                </span>
+              </button>
+            )}
             <div className="max-h-80 overflow-y-auto custom-scrollbar">
               {TEMPLATES.map(t => {
                 const Icon = t.icon

@@ -52,6 +52,8 @@ class FeedbackReport(Base):
     self_focus_feedback = Column(Text, nullable=True)
     repetitive_wording = Column(JSON, nullable=True) # {"words": ["word1", "word2"], "feedback": "..."}
     detected_decision = Column(String, nullable=True) # Topic of a decision detected in the entry
+    emotion_labels = Column(JSON, nullable=True) # 1-3 precise emotion words
+    distress_flag = Column(Boolean, default=False) # acute-crisis signal -> support card
 
     # Find Your Energy
     energy_data = Column(JSON, nullable=True)

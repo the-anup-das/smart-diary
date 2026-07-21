@@ -313,3 +313,36 @@ def soft_delete_entry(id: str, user_id: str = Depends(verify_session), db: Sessi
     entry.deleted_at = datetime.utcnow()
     db.commit()
     return {"success": True}
+
+@router.get("/api/entries/bright-spot")
+def get_bright_spot(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """A randomly chosen past high-mood entry — surfaced on heavy days as a
+    savoring exercise ('a good day worth revisiting')."""
+    from sqlalchemy import func as sa_func
+    import re as _re
+
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    for threshold in (8, 7):
+        row = (
+            db.query(models.JournalEntry, models.FeedbackReport)
+            .join(models.FeedbackReport, models.FeedbackReport.journal_entry_id == models.JournalEntry.id)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date < today_start,
+                models.FeedbackReport.mood_score >= threshold,
+            )
+            .order_by(sa_func.random())
+            .first()
+        )
+        if row:
+            entry, fb = row
+            text = _re.sub(r"<[^>]*>?", "", entry.content or "")
+            return {
+                "found": True,
+                "date": entry.date.strftime("%Y-%m-%d"),
+                "displayDate": entry.date.strftime("%B %d, %Y"),
+                "moodScore": fb.mood_score,
+                "snippet": text[:220].strip(),
+            }
+    return {"found": False}

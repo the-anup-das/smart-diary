@@ -246,8 +246,28 @@ def get_insights(
     ).count()
     
     top_sentiment = max(sentiments, key=sentiments.get) if sentiments else "—"
-    
+
+    # Gentle care nudge: sustained low mood over the last two weeks (needs a
+    # meaningful sample so one bad day never triggers it)
+    fortnight_ago = datetime.utcnow() - timedelta(days=14)
+    recent_moods = [
+        fb.mood_score
+        for entry, fb in (
+            db.query(models.JournalEntry, models.FeedbackReport)
+            .join(models.FeedbackReport, models.FeedbackReport.journal_entry_id == models.JournalEntry.id)
+            .filter(
+                models.JournalEntry.user_id == user_id,
+                models.JournalEntry.is_deleted == False,
+                models.JournalEntry.date >= fortnight_ago,
+                models.FeedbackReport.mood_score != None,
+            )
+            .all()
+        )
+    ]
+    persistent_low_mood = len(recent_moods) >= 7 and (sum(recent_moods) / len(recent_moods)) < 4.5
+
     return {
+        "persistentLowMood": persistent_low_mood,
         "summary": {
             "totalEntries": len(entries),
             "analyzedEntries": analyzed_count,

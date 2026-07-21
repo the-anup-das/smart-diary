@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card"
 
 export function ProfileSettings() {
   const [profile, setProfile] = React.useState({ name: "", email: "" })
+  const [prefs, setPrefs] = React.useState<any>({})
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [saveMessage, setSaveMessage] = React.useState("")
@@ -16,6 +17,7 @@ export function ProfileSettings() {
       .then(data => {
         if (!data.detail) {
            setProfile({ name: data.name || "", email: data.email || "" })
+           setPrefs(data.preferences || {})
         }
         setLoading(false)
       })
@@ -32,7 +34,7 @@ export function ProfileSettings() {
       await fetch("/api/users/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(profile)
+        body: JSON.stringify({ ...profile, preferences: prefs })
       })
       setSaveMessage("Profile updated successfully!")
       setTimeout(() => setSaveMessage(""), 3000)
@@ -68,6 +70,29 @@ export function ProfileSettings() {
             value={profile.email} 
             onChange={(e) => setProfile({...profile, email: e.target.value})} 
             placeholder="you@example.com" 
+            className="w-full md:w-2/3"
+          />
+        </div>
+        <div className="space-y-2 pt-4 border-t border-black/5 dark:border-white/5">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Support resources region</label>
+          <p className="text-xs text-gray-500">
+            If an entry ever sounds like a crisis, the journal shows helplines for this region.
+          </p>
+          <select
+            value={prefs?.support_region || "international"}
+            onChange={(e) => setPrefs({ ...prefs, support_region: e.target.value })}
+            aria-label="Support resources region"
+            className="w-full md:w-2/3 rounded-xl border border-black/10 dark:border-white/10 bg-transparent p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 dark:bg-zinc-900"
+          >
+            <option value="international">International (findahelpline.com)</option>
+            <option value="india">India</option>
+            <option value="us">United States</option>
+            <option value="uk">United Kingdom</option>
+          </select>
+          <Input
+            value={prefs?.support_custom || ""}
+            onChange={(e) => setPrefs({ ...prefs, support_custom: e.target.value })}
+            placeholder="Optional: a personal contact or local helpline to show first"
             className="w-full md:w-2/3"
           />
         </div>
