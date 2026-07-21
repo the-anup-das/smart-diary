@@ -7,6 +7,8 @@ import Image from '@tiptap/extension-image'
 import { FeedbackDashboard } from "./FeedbackDashboard"
 import { EchoesWidget } from "./EchoesWidget"
 import { MorningIntentions } from "./MorningIntentions"
+import { OnThisDay } from "./OnThisDay"
+import { DecisionNudge } from "./DecisionNudge"
 import { CheckCircle2, Trash, WifiOff } from "lucide-react"
 import { DeleteConfirmationModal } from "./DeleteConfirmationModal"
 import { useNetworkStatus } from "@/lib/useNetworkStatus"
@@ -322,8 +324,12 @@ export function JournalEditor({ initialContent = "", initialId = null }: { initi
         </div>
       </div>
       
+      <DecisionNudge />
+
+      <OnThisDay />
+
       <EchoesWidget />
-      
+
       <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
       
       <div className="flex-1 relative overflow-hidden group">

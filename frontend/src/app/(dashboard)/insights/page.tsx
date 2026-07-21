@@ -5,6 +5,7 @@ import { TopicRing } from "@/components/insights/TopicRing"
 import { VocabChart } from "@/components/insights/VocabChart"
 import { TargetsWidget } from "@/components/insights/TargetsWidget"
 import { StyleInsights } from "@/components/insights/StyleInsights"
+import { WeeklyReview } from "@/components/insights/WeeklyReview"
 import { TrendingUp, TrendingDown, Brain, BookOpen, Flame, BarChart2, Check, X, Pin, Sparkles, PenTool } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
@@ -195,6 +196,9 @@ export default function InsightsPage() {
       {/* Dashboard Content */}
       {!loading && data && data.summary.analyzedEntries > 0 && (
         <div className="space-y-6">
+          {/* Weekly AI Review — trailing 7 days, independent of range filter */}
+          {range === "week" && <WeeklyReview />}
+
           {/* Targets Module */}
           <TargetsWidget targets={data.targets} />
           
