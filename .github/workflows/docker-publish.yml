@@ -15,6 +15,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      components: ${{ steps.build-matrix.outputs.components }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,17 +39,32 @@ jobs:
             frontend:
               - 'frontend/**'
 
+      # The matrix context is not allowed in a job-level `if`, so gate by
+      # building the component list dynamically instead.
+      - name: Compose build matrix
+        id: build-matrix
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            COMPONENTS='["backend","frontend"]'
+          else
+            COMPONENTS='[]'
+            if [ "${{ steps.filter.outputs.backend }}" = "true" ]; then
+              COMPONENTS=$(echo "$COMPONENTS" | jq -c '. + ["backend"]')
+            fi
+            if [ "${{ steps.filter.outputs.frontend }}" = "true" ]; then
+              COMPONENTS=$(echo "$COMPONENTS" | jq -c '. + ["frontend"]')
+            fi
+          fi
+          echo "components=$COMPONENTS" >> "$GITHUB_OUTPUT"
+
   build-and-push:
     needs: changes
+    if: needs.changes.outputs.components != '[]'
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        component: [backend, frontend]
-    
-    if: |
-      github.event_name == 'workflow_dispatch' || 
-      needs.changes.outputs[matrix.component] == 'true'
-      
+        component: ${{ fromJSON(needs.changes.outputs.components) }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
