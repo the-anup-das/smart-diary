@@ -33,7 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from routers import auth, entries, analyze, insights, users, decisions, voice
+from routers import auth, entries, analyze, insights, users, decisions, voice, chat
 
 app.include_router(auth.router)
 app.include_router(entries.router)
@@ -42,6 +42,7 @@ app.include_router(insights.router)
 app.include_router(users.router)
 app.include_router(decisions.router)
 app.include_router(voice.router)
+app.include_router(chat.router)
 @app.get("/api/health")
 async def health_check():
     return {"status": "operational", "engine": "FastAPI"}
