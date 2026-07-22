@@ -12,8 +12,8 @@ const MAX_CHUNK_DURATION_MS = 6000 // Rolling flush during continuous speech
 // floor for ~0.7s when the mic opens, then require speech-band energy to rise
 // meaningfully above it — sustained for a few frames — before we call it voice.
 const CALIBRATION_FRAMES = 40        // ~0.7s at 60fps
-const SPEECH_RUN_FRAMES = 5          // consecutive frames above threshold to count as speech
-const MIN_SPEECH_FRAMES_PER_CHUNK = 8 // chunks with less real speech than this are dropped
+const SPEECH_RUN_FRAMES = 6          // consecutive frames above threshold to count as speech
+const MIN_SPEECH_FRAMES_PER_CHUNK = 15 // ~250ms of real speech required, else chunk is dropped
 const SPEECH_HOLD_MS = 900           // how long "hearing you" lingers after the last loud frame
 const FLOOR_MULT = 1.9               // threshold = max(floor*1.9, floor+10)
 const FLOOR_OFFSET = 10
@@ -187,8 +187,14 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
         }
       } else {
         speechRunRef.current = 0
-        // Slowly track a drifting noise floor (AC turning on, etc.)
-        noiseFloorRef.current = noiseFloorRef.current * 0.995 + level * 0.005
+        // Track the drifting noise floor (AC turning on, browser auto-gain
+        // ramping). Rises fast so amplified noise can't creep over the
+        // threshold; falls slowly so a brief hush doesn't oversensitize.
+        if (level > noiseFloorRef.current) {
+          noiseFloorRef.current = noiseFloorRef.current * 0.97 + level * 0.03
+        } else {
+          noiseFloorRef.current = noiseFloorRef.current * 0.995 + level * 0.005
+        }
         // Just went quiet after speech → count down to a quick flush
         if (isTalkingRef.current && !silenceFlushTimerRef.current) {
           silenceFlushTimerRef.current = setTimeout(() => {
@@ -270,7 +276,12 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       return
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        // Explicit noise suppression + echo cancellation: without them the
+        // browser's auto-gain slowly amplifies room noise until it registers
+        // as speech, feeding Whisper silence it then hallucinates over.
+        audio: { noiseSuppression: true, echoCancellation: true },
+      })
       streamRef.current = stream
       isRecordingRef.current = true
       // Fresh VAD calibration per session — rooms and mics change

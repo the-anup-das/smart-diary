@@ -183,6 +183,55 @@ async def voice_warm(user_id: str = Depends(verify_session)):
         return {"ok": False, "reason": error_msg}
 
 
+# Phrases Whisper famously invents from silence/noise (YouTube-training artifacts)
+_FILLER_PHRASES = {
+    "thank you", "thanks for watching", "please subscribe", "subscribe",
+    "all right", "alright", "okay", "ok", "you", "bye", "good", "hello",
+    "hi", "yeah", "so", "the end", "thank you for watching",
+}
+
+
+def _clean_transcript(text: str) -> str:
+    """Collapse Whisper repetition loops and drop pure-hallucination chunks.
+
+    On mostly-silent audio Whisper emits runs like "All right. All right. ..."
+    x25. Collapse any run of 3+ identical consecutive sentences to a single
+    occurrence, and if what remains is nothing but known filler phrases, drop
+    the whole chunk. Genuine dictation is unaffected: real speech never
+    repeats an identical sentence three-plus times in one breath.
+    """
+    import re as _re
+
+    if not text:
+        return ""
+
+    def norm(s: str) -> str:
+        return _re.sub(r"[^a-z ]", "", s.lower()).strip()
+
+    # Single bare filler phrase → silence artifact
+    if norm(text) in _FILLER_PHRASES:
+        return ""
+
+    parts = [p.strip() for p in _re.split(r"(?<=[.!?,])\s+", text) if p.strip()]
+    cleaned: list[str] = []
+    run_detected = False
+    i = 0
+    while i < len(parts):
+        j = i
+        while j < len(parts) and norm(parts[j]) == norm(parts[i]):
+            j += 1
+        if j - i >= 3:
+            run_detected = True
+            cleaned.append(parts[i])  # keep one instance of the repeated phrase
+        else:
+            cleaned.extend(parts[i:j])
+        i = j
+
+    if run_detected and all(norm(s) in _FILLER_PHRASES for s in cleaned):
+        return ""
+    return " ".join(cleaned)
+
+
 @router.post("/api/voice/transcribe")
 async def transcribe_audio(
     audio: UploadFile = File(...),
@@ -227,20 +276,12 @@ async def transcribe_audio(
                 model=STT_MODEL,
                 file=f,
                 language="en",
+                # Deterministic decoding: temperature fallback is a major source
+                # of repetition loops on low-speech audio.
+                temperature=0.0,
             )
-        
-        text = result.text.strip() if result.text else ""
-        
-        # Whisper Hallucination Catch-All
-        # Even with VAD and prompt steering, Whisper often emits these specific phrases on static.
-        # We only drop them if they are the ONLY words in the 5-second chunk.
-        hallucinations = {
-            "thank you.", "thank you", "thanks for watching.", "thanks for watching",
-            "please subscribe.", "subscribe.", "all right.", "okay.", "you.", "bye."
-        }
-        if text.lower() in hallucinations:
-            return {"text": ""}
-            
+
+        text = _clean_transcript(result.text.strip() if result.text else "")
         return {"text": text}
     except openai.APIConnectionError:
         raise HTTPException(
