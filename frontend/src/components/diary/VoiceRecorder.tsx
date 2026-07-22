@@ -2,11 +2,21 @@
 import * as React from "react"
 import { Mic, MicOff, Loader2, Brain, Download, Cpu, AlertTriangle, RefreshCw } from "lucide-react"
 
-const CHUNK_DURATION_MS = 5000
 const WARM_POLL_INTERVAL_MS = 5000
-const SILENCE_THRESHOLD = 30 // Increased to ignore louder background noise
-const SILENCE_TIMEOUT_MS = 1500 // How long to wait for a pause before transcribing
-const MAX_CHUNK_DURATION_MS = 15000 // Force transcribe after 15s even if no pause
+const SILENCE_TIMEOUT_MS = 700 // Pause length that triggers transcription (feels immediate)
+const MAX_CHUNK_DURATION_MS = 6000 // Rolling flush during continuous speech
+
+// ── Adaptive VAD ──
+// A fixed loudness threshold can't work across mics/rooms: a quiet bedroom and
+// a room with a fan differ by 20+ dB. Instead we calibrate the ambient noise
+// floor for ~0.7s when the mic opens, then require speech-band energy to rise
+// meaningfully above it — sustained for a few frames — before we call it voice.
+const CALIBRATION_FRAMES = 40        // ~0.7s at 60fps
+const SPEECH_RUN_FRAMES = 5          // consecutive frames above threshold to count as speech
+const MIN_SPEECH_FRAMES_PER_CHUNK = 8 // chunks with less real speech than this are dropped
+const SPEECH_HOLD_MS = 900           // how long "hearing you" lingers after the last loud frame
+const FLOOR_MULT = 1.9               // threshold = max(floor*1.9, floor+10)
+const FLOOR_OFFSET = 10
 
 // Estimated load time in seconds (first load = download + load, subsequent = load only)
 const ESTIMATED_FIRST_LOAD_S = 45
@@ -28,6 +38,7 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
   const [isTranscribing, setIsTranscribing] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [isTalking, setIsTalking] = React.useState(false)
+  const [calibrating, setCalibrating] = React.useState(false)
 
   // Warming progress state
   const [warmProgress, setWarmProgress] = React.useState(0)
@@ -48,8 +59,14 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
   const audioCtxRef = React.useRef<AudioContext | null>(null)
   const analyserRef = React.useRef<AnalyserNode | null>(null)
   const animFrameRef = React.useRef<number | null>(null)
-  const maxVolumeInChunkRef = React.useRef<number>(0)
   const waveContainerRef = React.useRef<HTMLDivElement>(null)
+
+  // Adaptive VAD refs
+  const noiseFloorRef = React.useRef(12)
+  const calibFramesRef = React.useRef(0)
+  const calibSumRef = React.useRef(0)
+  const speechRunRef = React.useRef(0)
+  const chunkSpeechFramesRef = React.useRef(0)
   
   // VAD UI Debounce
   const isTalkingRef = React.useRef(false)
@@ -127,40 +144,64 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
     if (!analyserRef.current || !isRecordingRef.current) return
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
     analyserRef.current.getByteFrequencyData(dataArray)
-    let max = 0
-    for (let i = 0; i < dataArray.length; i++) { if (dataArray[i] > max) max = dataArray[i] }
-    
-    maxVolumeInChunkRef.current = Math.max(maxVolumeInChunkRef.current, max)
-    
-    // UI Feedback for VAD
-    if (max >= SILENCE_THRESHOLD) {
-      if (!isTalkingRef.current) {
-        isTalkingRef.current = true
-        setIsTalking(true)
-      }
-      if (talkingTimerRef.current) clearTimeout(talkingTimerRef.current)
-      talkingTimerRef.current = setTimeout(() => {
-        isTalkingRef.current = false
-        setIsTalking(false)
-      }, 1000)
 
-      // SMART FLUSH: Reset the silence timer because we just heard sound
-      if (silenceFlushTimerRef.current) clearTimeout(silenceFlushTimerRef.current)
-      silenceFlushTimerRef.current = null
+    // Average energy in the speech band (~300 Hz – 3.4 kHz) instead of the max
+    // across the whole spectrum — a fan hum or a keyboard click no longer
+    // registers as voice.
+    const binHz = (audioCtxRef.current?.sampleRate || 48000) / (2 * dataArray.length)
+    const startBin = Math.max(1, Math.round(300 / binHz))
+    const endBin = Math.min(dataArray.length, Math.round(3400 / binHz))
+    let sum = 0
+    for (let i = startBin; i < endBin; i++) sum += dataArray[i]
+    const level = sum / Math.max(1, endBin - startBin)
+
+    if (calibFramesRef.current < CALIBRATION_FRAMES) {
+      // Learn the room's ambient noise before judging anything as speech
+      calibSumRef.current += level
+      calibFramesRef.current++
+      if (calibFramesRef.current === CALIBRATION_FRAMES) {
+        noiseFloorRef.current = calibSumRef.current / CALIBRATION_FRAMES
+        setCalibrating(false)
+      }
     } else {
-      // We are silent right now. If we were recently talking, start the countdown to flush.
-      if (isTalkingRef.current && !silenceFlushTimerRef.current) {
-        silenceFlushTimerRef.current = setTimeout(() => {
-           // Silence period reached! Flush the current recording.
-           if (typeof (window as any).__voiceFlush === "function") {
-             (window as any).__voiceFlush()
-           }
-        }, SILENCE_TIMEOUT_MS)
+      const threshold = Math.max(noiseFloorRef.current * FLOOR_MULT, noiseFloorRef.current + FLOOR_OFFSET)
+
+      if (level >= threshold) {
+        speechRunRef.current++
+        // Require sustained energy before calling it voice (kills clicks/pops)
+        if (speechRunRef.current >= SPEECH_RUN_FRAMES) {
+          chunkSpeechFramesRef.current++
+          if (!isTalkingRef.current) {
+            isTalkingRef.current = true
+            setIsTalking(true)
+          }
+          if (talkingTimerRef.current) clearTimeout(talkingTimerRef.current)
+          talkingTimerRef.current = setTimeout(() => {
+            isTalkingRef.current = false
+            setIsTalking(false)
+          }, SPEECH_HOLD_MS)
+
+          // Heard voice — cancel any pending pause-flush
+          if (silenceFlushTimerRef.current) clearTimeout(silenceFlushTimerRef.current)
+          silenceFlushTimerRef.current = null
+        }
+      } else {
+        speechRunRef.current = 0
+        // Slowly track a drifting noise floor (AC turning on, etc.)
+        noiseFloorRef.current = noiseFloorRef.current * 0.995 + level * 0.005
+        // Just went quiet after speech → count down to a quick flush
+        if (isTalkingRef.current && !silenceFlushTimerRef.current) {
+          silenceFlushTimerRef.current = setTimeout(() => {
+            if (typeof (window as any).__voiceFlush === "function") {
+              (window as any).__voiceFlush()
+            }
+          }, SILENCE_TIMEOUT_MS)
+        }
       }
     }
 
     if (waveContainerRef.current) {
-      const scale = 1 + (max / 255) * 0.5
+      const scale = 1 + Math.min(level / 80, 1) * 0.5
       waveContainerRef.current.style.setProperty("--vol-scale", scale.toString())
     }
     animFrameRef.current = requestAnimationFrame(updateVolume)
@@ -185,11 +226,13 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       silenceFlushTimerRef.current = null
       maxDurationTimerRef.current = null
 
-      if (maxVolumeInChunkRef.current >= SILENCE_THRESHOLD) {
+      // Only ship chunks containing real sustained speech — silence and noise
+      // never reach Whisper (which also stops it hallucinating filler words).
+      if (chunkSpeechFramesRef.current >= MIN_SPEECH_FRAMES_PER_CHUNK) {
         transcribeBlob(new Blob(chunks, { type: mimeType }))
       }
-      
-      maxVolumeInChunkRef.current = 0
+
+      chunkSpeechFramesRef.current = 0
       // Safety check: only restart if we are still supposed to be recording AND the stream is still active
       if (isRecordingRef.current && stream.active) {
         recordChunk(stream)
@@ -230,6 +273,12 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
       isRecordingRef.current = true
+      // Fresh VAD calibration per session — rooms and mics change
+      calibFramesRef.current = 0
+      calibSumRef.current = 0
+      speechRunRef.current = 0
+      chunkSpeechFramesRef.current = 0
+      setCalibrating(true)
       setState("recording")
       onRecordingChange?.(true)
       const AC = window.AudioContext || (window as any).webkitAudioContext
@@ -238,7 +287,6 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       analyserRef.current = audioCtxRef.current.createAnalyser()
       analyserRef.current.fftSize = 256
       source.connect(analyserRef.current)
-      maxVolumeInChunkRef.current = 0
       updateVolume()
       recordChunk(stream)
     } catch (e: any) {
@@ -450,8 +498,8 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
 
       {/* Recording status */}
       {isRecording && !isTranscribing && (
-        <span className={`text-xs font-medium transition-colors duration-300 select-none ${isTalking ? "text-red-500 animate-pulse" : "text-gray-400"}`}>
-          {isTalking ? "Voice detected…" : "Silent (Waiting for voice)…"}
+        <span className={`text-xs font-medium transition-colors duration-300 select-none ${isTalking ? "text-emerald-500" : "text-gray-400"}`}>
+          {calibrating ? "Calibrating mic…" : isTalking ? "Hearing you…" : "Listening…"}
         </span>
       )}
       {isTranscribing && (
