@@ -191,6 +191,48 @@ _FILLER_PHRASES = {
 }
 
 
+def _collapse_phrase_loops(text: str) -> str:
+    """Collapse intra-sentence loops like 'a little bit of a little bit of …'.
+
+    Whisper's decoder can lock onto a 1-6 word phrase and emit it dozens of
+    times without punctuation, so sentence-level dedup never sees it. Detect
+    consecutive n-gram runs at the word level; if collapsing removes most of
+    the chunk, the whole thing was a decoder loop — drop it.
+    """
+    words = text.split()
+    if len(words) < 8:
+        return text
+
+    changed = True
+    while changed:
+        changed = False
+        for n in range(1, 7):
+            i = 0
+            out: list[str] = []
+            while i < len(words):
+                run = 1
+                while (
+                    i + (run + 1) * n <= len(words)
+                    and [w.lower() for w in words[i + run * n : i + (run + 1) * n]]
+                    == [w.lower() for w in words[i : i + n]]
+                ):
+                    run += 1
+                if run >= 4:
+                    out.extend(words[i : i + n])  # keep a single instance
+                    i += run * n
+                    changed = True
+                else:
+                    out.append(words[i])
+                    i += 1
+            words = out
+    collapsed = " ".join(words)
+
+    # If the loop collapse removed >60% of the text, nothing real was said
+    if len(collapsed) < 0.4 * len(text):
+        return ""
+    return collapsed
+
+
 def _clean_transcript(text: str) -> str:
     """Collapse Whisper repetition loops and drop pure-hallucination chunks.
 
@@ -210,6 +252,11 @@ def _clean_transcript(text: str) -> str:
 
     # Single bare filler phrase → silence artifact
     if norm(text) in _FILLER_PHRASES:
+        return ""
+
+    # Kill decoder loops that repeat a phrase inside one sentence
+    text = _collapse_phrase_loops(text)
+    if not text:
         return ""
 
     parts = [p.strip() for p in _re.split(r"(?<=[.!?,])\s+", text) if p.strip()]
@@ -279,10 +326,29 @@ async def transcribe_audio(
                 # Deterministic decoding: temperature fallback is a major source
                 # of repetition loops on low-speech audio.
                 temperature=0.0,
+                # Verbose output includes Whisper's own per-segment confidence,
+                # which is the only reliable way to reject plausible-sounding
+                # sentences it invents from background noise.
+                response_format="verbose_json",
             )
 
-        text = _clean_transcript(result.text.strip() if result.text else "")
-        return {"text": text}
+        segments = getattr(result, "segments", None)
+        if segments:
+            kept = []
+            for seg in segments:
+                no_speech = getattr(seg, "no_speech_prob", 0.0) or 0.0
+                logprob = getattr(seg, "avg_logprob", 0.0) or 0.0
+                compression = getattr(seg, "compression_ratio", 1.0) or 1.0
+                # Whisper's own thresholds: likely-silence, low-confidence, or
+                # degenerate-repetition segments are hallucination material.
+                if no_speech > 0.5 or logprob < -0.9 or compression > 2.2:
+                    continue
+                kept.append((seg.text or "").strip())
+            raw_text = " ".join(t for t in kept if t)
+        else:
+            raw_text = result.text.strip() if result.text else ""
+
+        return {"text": _clean_transcript(raw_text)}
     except openai.APIConnectionError:
         raise HTTPException(
             status_code=503,
