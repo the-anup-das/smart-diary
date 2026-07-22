@@ -67,6 +67,11 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
   const calibSumRef = React.useRef(0)
   const speechRunRef = React.useRef(0)
   const chunkSpeechFramesRef = React.useRef(0)
+  // Rolling-minimum window: the quietest moment of any ~1.2s span IS the true
+  // ambient level (speech always has inter-word gaps), so the floor can track
+  // a changing room without ever ratcheting up from continuous speech.
+  const windowMinRef = React.useRef(Infinity)
+  const windowCountRef = React.useRef(0)
   
   // VAD UI Debounce
   const isTalkingRef = React.useRef(false)
@@ -187,14 +192,6 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
         }
       } else {
         speechRunRef.current = 0
-        // Track the drifting noise floor (AC turning on, browser auto-gain
-        // ramping). Rises fast so amplified noise can't creep over the
-        // threshold; falls slowly so a brief hush doesn't oversensitize.
-        if (level > noiseFloorRef.current) {
-          noiseFloorRef.current = noiseFloorRef.current * 0.97 + level * 0.03
-        } else {
-          noiseFloorRef.current = noiseFloorRef.current * 0.995 + level * 0.005
-        }
         // Just went quiet after speech → count down to a quick flush
         if (isTalkingRef.current && !silenceFlushTimerRef.current) {
           silenceFlushTimerRef.current = setTimeout(() => {
@@ -203,6 +200,21 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
             }
           }, SILENCE_TIMEOUT_MS)
         }
+      }
+
+      // Rolling-min floor tracking (every frame, talking or not). Never
+      // ratchets from speech: adapting per-frame from sub-threshold levels
+      // made quiet syllables push the floor up until real speech couldn't
+      // cross the threshold anymore ("works, then stops until mute/unmute").
+      windowMinRef.current = Math.min(windowMinRef.current, level)
+      windowCountRef.current++
+      if (windowCountRef.current >= 75) { // ~1.2s at 60fps
+        noiseFloorRef.current = Math.max(
+          3,
+          noiseFloorRef.current * 0.6 + windowMinRef.current * 0.4
+        )
+        windowMinRef.current = Infinity
+        windowCountRef.current = 0
       }
     }
 
@@ -289,6 +301,8 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       calibSumRef.current = 0
       speechRunRef.current = 0
       chunkSpeechFramesRef.current = 0
+      windowMinRef.current = Infinity
+      windowCountRef.current = 0
       setCalibrating(true)
       setState("recording")
       onRecordingChange?.(true)
