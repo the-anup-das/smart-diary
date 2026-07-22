@@ -214,6 +214,18 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
   // ─── begin recording ──────────────────────────────────────────────────────
 
   const beginRecording = React.useCallback(async () => {
+    // Browsers only expose the mic API on secure origins (HTTPS or localhost).
+    // A NAS served over plain http://<ip> gets `navigator.mediaDevices ===
+    // undefined`, which used to surface as a cryptic "Mic error: TypeError".
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError(
+        window.isSecureContext
+          ? "This browser doesn't support microphone capture."
+          : "Voice input needs a secure connection. Browsers block the microphone on plain HTTP — open the app via HTTPS (e.g. a reverse proxy) or on localhost."
+      )
+      setState("error")
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
@@ -452,8 +464,9 @@ export function VoiceRecorder({ onTranscript, onRecordingChange, disabled, model
       {/* Dismissible error */}
       {error && state !== "recording" && (
         <span
-          className="text-xs text-red-500 max-w-[180px] truncate cursor-pointer"
-          title={error}
+          className="text-xs text-red-500 max-w-[280px] leading-snug cursor-pointer"
+          role="alert"
+          title="Click to dismiss"
           onClick={() => setError(null)}
         >
           {error}

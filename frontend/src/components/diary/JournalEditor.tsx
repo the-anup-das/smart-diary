@@ -1,6 +1,7 @@
 "use client"
 import * as React from "react"
 import { useEditor, EditorContent } from '@tiptap/react'
+import { Extension } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
@@ -16,6 +17,27 @@ import { VoiceRecorder } from "./VoiceRecorder"
 import { TemplatePicker, TEMPLATES } from "./TemplatePicker"
 import { MoodCheckin } from "@/components/wellbeing/MoodCheckin"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
+
+// Inside a list, Tab must ALWAYS stay in the editor: indent when possible,
+// otherwise do nothing. Without this, an impossible indent (e.g. the first
+// bullet) lets the browser move focus out of the editor mid-writing.
+const ListTabKeymap = Extension.create({
+  name: 'listTabKeymap',
+  addKeyboardShortcuts() {
+    return {
+      Tab: () => {
+        if (!this.editor.isActive('listItem')) return false
+        this.editor.commands.sinkListItem('listItem')
+        return true
+      },
+      'Shift-Tab': () => {
+        if (!this.editor.isActive('listItem')) return false
+        this.editor.commands.liftListItem('listItem')
+        return true
+      },
+    }
+  },
+})
 
 const REFLECTING_MESSAGES = [
   "Reading your day…",
@@ -158,6 +180,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
     immediatelyRender: false,
     extensions: [
       StarterKit,
+      ListTabKeymap,
       Image,
       Placeholder.configure({
         placeholder: "What's heavily occupying your thoughts today? (Use '-' for bullets or '#' for headers)",
