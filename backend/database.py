@@ -13,7 +13,13 @@ if not DATABASE_URL:
 if DATABASE_URL and "?" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.split("?")[0] # Strip Prisma's ?schema=public which crashes Python psycopg2
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=1800
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

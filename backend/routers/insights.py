@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, timedelta
@@ -74,6 +74,7 @@ def get_insights(
     # Fetch all entries with feedback in the date range
     entries = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(
             models.JournalEntry.user_id == user_id,
             models.JournalEntry.date >= start_date,

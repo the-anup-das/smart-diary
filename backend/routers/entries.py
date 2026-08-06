@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from datetime import datetime
 from pydantic import BaseModel
 from database import get_db
@@ -80,13 +80,16 @@ def upsert_entry(data: EntryUpdate, user_id: str = Depends(verify_session), db: 
     return {"success": True, "id": entry.id}
 
 @router.get("/api/entries/history")
-def get_entry_history(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    """Return all entries with feedback summaries for the history timeline."""
+def get_entry_history(skip: int = 0, limit: int = 50, user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
+    """Return entries with feedback summaries for the history timeline."""
     import re
     entries = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
         .order_by(models.JournalEntry.date.desc())
+        .offset(skip)
+        .limit(limit)
         .all()
     )
     
@@ -123,6 +126,7 @@ def get_entry_context(user_id: str = Depends(verify_session), db: Session = Depe
     # Find the most recent entry that has a feedback score
     latest_with_feedback = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
         .join(models.FeedbackReport)
         .filter(models.FeedbackReport.mood_score.isnot(None))
@@ -144,6 +148,7 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
     recent_limit = datetime.utcnow() - timedelta(days=3)
     recent_entries = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.date >= recent_limit, models.JournalEntry.is_deleted == False)
         .join(models.FeedbackReport)
         .all()
@@ -161,6 +166,7 @@ def get_entry_echoes(user_id: str = Depends(verify_session), db: Session = Depen
     echo_threshold = datetime.utcnow() - timedelta(days=7)
     echo_entry = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(
             models.JournalEntry.user_id == user_id,
             models.JournalEntry.date < echo_threshold,
@@ -205,6 +211,7 @@ def search_entries(
 
     query = (
         db.query(models.JournalEntry)
+        .options(joinedload(models.JournalEntry.feedback))
         .filter(models.JournalEntry.user_id == user_id, models.JournalEntry.is_deleted == False)
     )
     q = (q or "").strip()

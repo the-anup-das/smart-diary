@@ -6,7 +6,9 @@ import { VocabChart } from "@/components/insights/VocabChart"
 import { TargetsWidget } from "@/components/insights/TargetsWidget"
 import { StyleInsights } from "@/components/insights/StyleInsights"
 import { WeeklyReview } from "@/components/insights/WeeklyReview"
-import { TrendingUp, TrendingDown, Brain, BookOpen, Flame, BarChart2, Check, X, Pin, Sparkles, PenTool } from "lucide-react"
+import { Target, TrendingUp, TrendingDown, Minus, Calendar, Brain, ListTodo, Activity, Zap, MessageSquare, Sun, BookOpen, RefreshCw, Sparkles, PenTool, BarChart2, Pin, Check, X, Flame } from "lucide-react"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
 type TimeRange = "day" | "week" | "month" | "year" | "all"
@@ -76,63 +78,27 @@ function useAnimatedCounter(target: number, duration = 800) {
 }
 
 // --- Cache helper ---
-const cacheKey = (range: string) => `insights_cache_${range}`
-function getCached(range: string): InsightsData | null {
-  try {
-    const raw = sessionStorage.getItem(cacheKey(range))
-    if (!raw) return null
-    const { data, ts } = JSON.parse(raw)
-    if (Date.now() - ts > 60_000) return null // 1min TTL
-    return data
-  } catch { return null }
-}
-function setCache(range: string, data: InsightsData) {
-  try { sessionStorage.setItem(cacheKey(range), JSON.stringify({ data, ts: Date.now() })) } catch {}
-}
-
 export default function InsightsPage() {
   const [range, setRange] = React.useState<TimeRange>("week")
-  const [data, setData] = React.useState<InsightsData | null>(null)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState<string | null>(null)
-
-  const fetchInsights = React.useCallback(async (r: TimeRange, skipCache = false) => {
-    if (!skipCache) {
-      const cached = getCached(r)
-      if (cached) { setData(cached); setLoading(false); return }
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(`/api/insights?range=${r}`)
-      if (!res.ok) {
-        const text = await res.text()
-        try { setError(JSON.parse(text).detail || `Error ${res.status}`) }
-        catch { setError(`Server Error (${res.status})`) }
-        return
-      }
-      const json = await res.json()
-      setData(json)
-      setCache(r, json)
-    } catch (err: any) {
-      setError(err.message || "Failed to load insights")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  React.useEffect(() => { fetchInsights(range) }, [range, fetchInsights])
+  
+  const { data, error: swrError, isLoading: loading, mutate } = useSWR<InsightsData>(
+    `/api/insights?range=${range}`,
+    fetcher,
+    { keepPreviousData: true }
+  )
+  const error = swrError?.message || (swrError ? "Failed to load insights" : null)
 
   const handleLoopAction = async (loopId: string, action: string) => {
     try {
       await fetch(`/api/open-loops/${loopId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action })
       })
-      // Refetch to update UI
-      fetchInsights(range, true)
-    } catch {}
+      mutate()
+    } catch (e) {
+      console.error(e)
+    }
   }
 
   const ranges: { key: TimeRange; label: string }[] = [
