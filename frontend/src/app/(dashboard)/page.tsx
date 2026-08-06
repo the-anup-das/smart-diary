@@ -1,4 +1,4 @@
-import { JournalEditor } from "@/components/diary/JournalEditor"
+import { JournalEditor } from "@/components/diary/DynamicJournalEditor"
 import { Onboarding } from "@/components/Onboarding"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"

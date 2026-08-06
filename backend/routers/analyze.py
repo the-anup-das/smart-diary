@@ -79,14 +79,14 @@ def _compute_vocab_stats(user_id: str, current_text: str, current_entry_id: str,
     current_words = _tokenize(current_text)
     
     # Fetch all prior entries for this user (excluding current)
-    prior_entries = db.query(models.JournalEntry).filter(
+    prior_entries = db.query(models.JournalEntry.content).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.id != current_entry_id
     ).all()
     
     historical_words = set()
-    for entry in prior_entries:
-        raw = re.sub(r'<[^>]*>?', '', entry.content or "")
+    for (content,) in prior_entries:
+        raw = re.sub(r'<[^>]*>?', '', content or "")
         historical_words |= _tokenize(raw)
     
     new_words = sorted(current_words - historical_words)

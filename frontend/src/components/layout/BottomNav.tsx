@@ -41,7 +41,7 @@ export function BottomNav() {
       )}
 
       {moreOpen && (
-        <div className="fixed bottom-[72px] right-3 z-50 md:hidden rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 w-48 fade-in" role="menu">
+        <div className="fixed bottom-[calc(72px+env(safe-area-inset-bottom))] right-3 z-50 md:hidden rounded-2xl border border-black/10 dark:border-white/15 bg-white dark:bg-zinc-900 shadow-2xl p-2 w-48 fade-in" role="menu">
           {MORE_ITEMS.map(item => {
             const Icon = item.icon
             const isActive = pathname.startsWith(item.href)

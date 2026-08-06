@@ -8,6 +8,9 @@ const withPWA = withPWAInit({
     (process.env.NODE_ENV === "development" && process.env.LOCAL_FORCE_PWA_ENABLE !== "true"),
   register: true,
   cacheOnFrontEndNav: true,
+  fallbacks: {
+    document: "/~offline",
+  },
   workboxOptions: {
     // New service workers wait until the user accepts the update prompt
     // (UpdatePrompt.tsx) instead of silently serving a mixed old/new app.

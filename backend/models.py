@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON, Boolean
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON, Boolean, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -20,13 +20,17 @@ class User(Base):
 class JournalEntry(Base):
     __tablename__ = "journal_entries"
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     date = Column(DateTime, default=datetime.utcnow, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    is_deleted = Column(Boolean, default=False)
+    is_deleted = Column(Boolean, default=False, index=True)
     deleted_at = Column(DateTime, nullable=True)
+    
+    __table_args__ = (
+        Index('ix_journal_entries_user_is_deleted_date', 'user_id', 'is_deleted', 'date'),
+    )
     
     user = relationship("User", back_populates="entries")
     feedback = relationship("FeedbackReport", back_populates="entry", uselist=False, cascade="all, delete-orphan")
@@ -70,10 +74,10 @@ class FeedbackReport(Base):
 class OpenLoop(Base):
     __tablename__ = "open_loops"
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     text = Column(Text, nullable=False)
     text_hash = Column(String, nullable=False, index=True)
-    status = Column(String, default="open")  # open, resolved, dismissed, pinned
+    status = Column(String, default="open", index=True)  # open, resolved, dismissed, pinned
     source_entry_id = Column(String, ForeignKey("journal_entries.id", ondelete="SET NULL"), nullable=True)
     detected_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
@@ -83,7 +87,7 @@ class OpenLoop(Base):
 class Decision(Base):
     __tablename__ = "decisions"
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     topic = Column(String, nullable=False)
     status = Column(String, default="active") # active, awaiting_outcome, archived
     framework = Column(String, nullable=True) # matrix, 10_10_10, etc.

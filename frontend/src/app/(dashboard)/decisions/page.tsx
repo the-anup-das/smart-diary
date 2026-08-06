@@ -3,6 +3,8 @@ import * as React from "react"
 import { GitMerge, Plus, ArrowRight, Activity, CheckCircle2, Archive, Sparkles } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
 
 interface DecisionData {
   id: string
@@ -15,35 +17,13 @@ interface DecisionData {
 
 export default function DecisionsLedgerPage() {
   const router = useRouter()
-  const [decisions, setDecisions] = React.useState<DecisionData[]>([])
-  const [loading, setLoading] = React.useState(true)
+  const { data: decisions, error: swrError, isLoading: loading, mutate } = useSWR<DecisionData[]>("/api/decisions", fetcher)
+  const loadError = !!swrError
   const [creating, setCreating] = React.useState(false)
   const [showModal, setShowModal] = React.useState(false)
   const [topic, setTopic] = React.useState("")
-  const [loadError, setLoadError] = React.useState(false)
   const [createError, setCreateError] = React.useState("")
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
-
-  const fetchDecisions = React.useCallback(async () => {
-    setLoading(true)
-    setLoadError(false)
-    try {
-      const res = await fetch('/api/decisions')
-      if (res.ok) {
-        const json = await res.json()
-        setDecisions(json)
-      } else {
-        setLoadError(true)
-      }
-    } catch (e) {
-      console.error(e)
-      setLoadError(true)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  React.useEffect(() => { fetchDecisions() }, [fetchDecisions])
 
   // Focus textarea when modal opens
   React.useEffect(() => {
@@ -61,8 +41,9 @@ export default function DecisionsLedgerPage() {
         body: JSON.stringify({ topic: topic.trim() })
       })
       if (res.ok) {
-        const data = await res.json()
-        router.push(`/decisions/${data.id}`)
+        const json = await res.json()
+        mutate() // Trigger revalidation to update the list
+        router.push(`/decisions/${json.id}`)
       } else {
         setCreateError("Couldn't create the decision. Please try again.")
       }
@@ -79,9 +60,9 @@ export default function DecisionsLedgerPage() {
     if (e.key === "Escape") { setShowModal(false); setTopic("") }
   }
 
-  const activeDecisions = decisions.filter(d => d.status === "active")
-  const decidedDecisions = decisions.filter(d => d.status === "decided")
-  const archivedDecisions = decisions.filter(d => d.status === "archived")
+  const activeDecisions = (decisions || []).filter(d => d.status === "active")
+  const decidedDecisions = (decisions || []).filter(d => d.status === "decided")
+  const archivedDecisions = (decisions || []).filter(d => d.status === "archived")
 
   return (
     <div className="flex flex-col w-full pt-6 pb-16 fade-in px-2 lg:px-4">
@@ -119,8 +100,8 @@ export default function DecisionsLedgerPage() {
             Couldn't load your decisions. The backend may be unreachable.
           </p>
           <button
-            onClick={fetchDecisions}
-            className="px-5 py-2 rounded-xl bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-600 transition-colors cursor-pointer"
+            onClick={() => mutate()}
+            className="px-5 py-2 rounded-xl bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-600 transition-colors shadow-sm"
           >
             Try again
           </button>

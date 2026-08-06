@@ -8,7 +8,10 @@ export async function GET(request: NextRequest) {
     const headers: Record<string, string> = {};
     if (sessionCookie) headers['Cookie'] = `session=${sessionCookie}`;
 
-    const res = await fetch(`${BACKEND_URL}/api/entries/history`, {
+    const searchParams = request.nextUrl.searchParams.toString();
+    const query = searchParams ? `?${searchParams}` : '';
+
+    const res = await fetch(`${BACKEND_URL}/api/entries/history${query}`, {
       method: 'GET',
       headers,
       cache: 'no-store',

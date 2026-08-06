@@ -5,7 +5,14 @@ import { Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Sparkles, 
 import { SENTIMENT_STYLES } from "@/lib/mood"
 import { DeleteConfirmationModal } from "@/components/diary/DeleteConfirmationModal"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
-import { ReadOnlyEditor } from "@/components/diary/ReadOnlyEditor"
+import dynamic from "next/dynamic"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
+
+const ReadOnlyEditor = dynamic(
+  () => import("@/components/diary/ReadOnlyEditor").then((mod) => mod.ReadOnlyEditor),
+  { ssr: false }
+)
 
 interface EntryData {
   id: string
@@ -30,9 +37,14 @@ export default function HistoryPage() {
   const router = useRouter()
   const [entries, setEntries] = React.useState<EntryData[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [hasMore, setHasMore] = React.useState(true)
+  const [skip, setSkip] = React.useState(0)
+  const LIMIT = 50
   const [expandedId, setExpandedId] = React.useState<string | null>(null)
   const [viewMode, setViewMode] = React.useState<ViewMode>("month")
-  const [preferences, setPreferences] = React.useState<any>({})
+  const { data: prefData } = useSWR("/api/users/me", fetcher)
+  const preferences = prefData?.preferences || {}
+  
   const [selectedEntry, setSelectedEntry] = React.useState<EntryData | null>(null)
   const [confirmDeleteEntry, setConfirmDeleteEntry] = React.useState<EntryData | null>(null)
   const [currentMonth, setCurrentMonth] = React.useState(() => {
@@ -86,25 +98,40 @@ export default function HistoryPage() {
     return () => { clearTimeout(timer); controller.abort() }
   }, [searchQ, searchSentiment, searchMood, searchActive])
 
-  React.useEffect(() => {
-    async function fetchHistory() {
-      try {
-        const res = await fetch('/api/entries/history')
-        if (res.ok) {
-          const json = await res.json()
-          setEntries(json.entries || [])
+  const fetchHistory = React.useCallback(async (currentSkip: number, isLoadMore = false) => {
+    try {
+      if (!isLoadMore) setLoading(true)
+      const res = await fetch(`/api/entries/history?skip=${currentSkip}&limit=${LIMIT}`)
+      if (res.ok) {
+        const json = await res.json()
+        const fetchedEntries = json.entries || []
+        if (fetchedEntries.length < LIMIT) setHasMore(false)
+        else setHasMore(true)
+
+        if (isLoadMore) {
+          setEntries(prev => [...prev, ...fetchedEntries])
+        } else {
+          setEntries(fetchedEntries)
         }
-        
-        const prefRes = await fetch('/api/users/me')
-        if (prefRes.ok) {
-          const prefJson = await prefRes.json()
-          setPreferences(prefJson.preferences || {})
-        }
-      } catch {}
-      finally { setLoading(false) }
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
     }
-    fetchHistory()
   }, [])
+
+  React.useEffect(() => {
+    fetchHistory(0, false)
+  }, [fetchHistory])
+
+  const handleLoadMore = () => {
+    if (!loading && hasMore) {
+      const nextSkip = skip + LIMIT
+      setSkip(nextSkip)
+      fetchHistory(nextSkip, true)
+    }
+  }
 
   // Build lookup: date string -> entry
   const entryMap = React.useMemo(() => {

@@ -3,6 +3,8 @@ import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Sparkles, AlertCircle, Bot, Zap, Clock, TrendingUp, CheckCircle2 } from "lucide-react"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
 
 interface Decision {
   id: string
@@ -16,34 +18,22 @@ interface Decision {
 export default function DecisionCanvasPage() {
   const params = useParams()
   const router = useRouter()
+  const { data: swrDecision, isLoading: loading, mutate } = useSWR<Decision>(`/api/decisions/${params.id}`, fetcher)
   const [decision, setDecision] = React.useState<Decision | null>(null)
-  const [loading, setLoading] = React.useState(true)
   const [simulating, setSimulating] = React.useState(false)
   const [agentResult, setAgentResult] = React.useState<any>(null)
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
   const [selectingPath, setSelectingPath] = React.useState(false)
 
   React.useEffect(() => {
-    async function fetchDecision() {
-      try {
-        const res = await fetch(`/api/decisions/${params.id}`)
-        if (res.ok) {
-          const json = await res.json()
-          setDecision(json)
-          setSelectedPath(json.primary_option_id || null)
-          // Load persisted analysis if it exists — no re-run needed
-          if (json.analysis_result && json.framework) {
-            setAgentResult({ framework: json.framework, data: json.analysis_result })
-          }
-        }
-      } catch (e) {
-        console.error(e)
-      } finally {
-        setLoading(false)
+    if (swrDecision) {
+      setDecision(swrDecision)
+      setSelectedPath(swrDecision.primary_option_id || null)
+      if (swrDecision.analysis_result && swrDecision.framework) {
+        setAgentResult({ framework: swrDecision.framework, data: swrDecision.analysis_result })
       }
     }
-    fetchDecision()
-  }, [params.id])
+  }, [swrDecision])
 
   const handleSimulate = async () => {
     setSimulating(true)
@@ -69,11 +59,9 @@ export default function DecisionCanvasPage() {
       if (res.ok) {
         const json = await res.json()
         try {
-          const parsedContent = JSON.parse(json.analysis_result)
+          const parsedContent = typeof json.analysis_result === 'string' ? JSON.parse(json.analysis_result) : json.analysis_result
           setAgentResult({ framework: json.framework_used, data: parsedContent })
-          if (decision && json.framework_used) {
-            setDecision({ ...decision, framework: json.framework_used })
-          }
+          mutate() // Trigger revalidation to pull updated state
         } catch (e) {
           setAgentResult({ framework: json.framework_used, raw: json.analysis_result })
         }
@@ -97,6 +85,7 @@ export default function DecisionCanvasPage() {
         setSelectedPath(pathName)
         const updated = await res.json()
         setDecision(updated)
+        mutate() // Keep SWR cache in sync
       }
     } catch (e) {
       console.error(e)

@@ -2,6 +2,8 @@
 import React, { useEffect, useState } from "react"
 import { motion } from "framer-motion"
 import { BatteryCharging, AlertCircle } from "lucide-react"
+import useSWR from "swr"
+import { fetcher } from "@/lib/fetcher"
 
 import { HumanBattery } from "@/components/energy/HumanBattery"
 import { DomainPanel } from "@/components/energy/DomainPanel"
@@ -11,32 +13,13 @@ import { MicroActions } from "@/components/energy/MicroActions"
 import { TomorrowFocus } from "@/components/energy/TomorrowFocus"
 
 export default function EnergyPage() {
-  const [loading, setLoading] = useState(true)
-  const [energyData, setEnergyData] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [isNetworkError, setIsNetworkError] = useState(false)
-
-  const fetchEnergyData = React.useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    setIsNetworkError(false)
-    try {
-      const res = await fetch("/api/energy/today")
-      const data = await res.json()
-      if (data.success && data.energy_data) {
-        setEnergyData(data.energy_data)
-      } else {
-        setError(data.detail || "No analysis available today. Write an entry to see your energy.")
-      }
-    } catch (err) {
-      setError("Could not reach the server for your energy data.")
-      setIsNetworkError(true)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { fetchEnergyData() }, [fetchEnergyData])
+  const { data: rawData, error: swrError, isLoading: loading, mutate } = useSWR("/api/energy/today", fetcher)
+  
+  const energyData = rawData?.success ? rawData.energy_data : null
+  const error = swrError 
+    ? "Could not reach the server for your energy data." 
+    : (!loading && !energyData ? rawData?.detail || "No analysis available today. Write an entry to see your energy." : null)
+  const isNetworkError = !!swrError
 
   const toggleActionState = (prev: any, id: string) => {
     const newActions = prev.micro_actions.map((a: any) =>
@@ -49,16 +32,16 @@ export default function EnergyPage() {
   }
 
   const handleToggleAction = async (id: string) => {
-    // Optimistic UI Update
-    setEnergyData((prev: any) => toggleActionState(prev, id))
+    if (!energyData) return
+    const optimisticData = { ...rawData, energy_data: toggleActionState(energyData, id) }
+    mutate(optimisticData, false)
 
-    // Persist — roll the toggle back if the server didn't record it
     try {
       const res = await fetch(`/api/energy/actions/${id}`, { method: 'PATCH' })
       if (!res.ok) throw new Error(`status ${res.status}`)
     } catch (e) {
       console.error("Failed to toggle action", e)
-      setEnergyData((prev: any) => toggleActionState(prev, id))
+      mutate()
     }
   }
 
@@ -98,8 +81,8 @@ export default function EnergyPage() {
           <p className="text-lg font-medium text-foreground">{error || "No data available."}</p>
           {isNetworkError ? (
             <button
-              onClick={fetchEnergyData}
-              className="mt-4 px-5 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+              onClick={() => mutate()}
+              className="mt-4 px-5 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors shadow-sm"
             >
               Try again
             </button>

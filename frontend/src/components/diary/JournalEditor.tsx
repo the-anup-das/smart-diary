@@ -384,7 +384,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       ? "fixed inset-0 z-[100] bg-background flex flex-col pt-6 px-4 lg:px-0 overflow-hidden"
       : "flex flex-col h-full w-full pt-6"
     }>
-      <div className={`flex justify-between items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
+      <div className={`flex flex-col md:flex-row gap-4 justify-between items-start md:items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">
             {(entryDate ? new Date(entryDate + 'T00:00:00') : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -398,11 +398,11 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
             </span>
           )}
         </div>
-        <div className="flex items-center space-x-4 fade-in">
+        <div className="flex flex-wrap items-center gap-2 md:gap-4 fade-in">
           {preferences?.enable_deletion && currentEntryId && (
             <button
               onClick={handleDelete}
-              className="p-2 rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer group"
+              className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors cursor-pointer group"
               title="Delete Current Entry"
               aria-label="Delete current entry"
             >
@@ -421,7 +421,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
           />
           <button
             onClick={() => setZenMode(z => !z)}
-            className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
+            className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer"
             title={zenMode ? "Exit focus mode (Esc)" : "Focus mode — hide everything but your writing"}
             aria-label={zenMode ? "Exit focus mode" : "Enter focus mode"}
             aria-pressed={zenMode}
