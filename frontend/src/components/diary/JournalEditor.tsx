@@ -17,6 +17,8 @@ import { VoiceRecorder } from "./VoiceRecorder"
 import { TemplatePicker, TEMPLATES } from "./TemplatePicker"
 import { MoodCheckin } from "@/components/wellbeing/MoodCheckin"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
+import { LoopNudge, detectLoopScore } from "@/components/calm/LoopNudge"
+import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
 
 // Inside a list, Tab must ALWAYS stay in the editor: indent when possible,
 // otherwise do nothing. Without this, an impossible indent (e.g. the first
@@ -91,6 +93,10 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
   const [zenMode, setZenMode] = React.useState(false)
   const [sttEnabled, setSttEnabled] = React.useState(false)
   const [sttModel, setSttModel] = React.useState<string>("")
+  // Live overthinking nudge: a cheap phrase heuristic on the text being written (see LoopNudge).
+  const [loopScore, setLoopScore] = React.useState(() => detectLoopScore(initialContent.replace(/<[^>]*>/g, " ")))
+  const [nudgeResetOpen, setNudgeResetOpen] = React.useState(false)
+  const [resetDoneToday, setResetDoneToday] = React.useState(false)
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
   const typeQueueRef = React.useRef<string[]>([])
 
@@ -198,6 +204,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
     onUpdate: ({ editor }) => {
       // Clear transient AI engine errors when the user resumes typing
       if (aiError) setAiError(null);
+      setLoopScore(detectLoopScore(editor.getText()))
 
       // Trigger debounce save
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
@@ -354,6 +361,13 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
     }
   }
 
+  // Lets the 3-Minute Reset drop a one-line reflection into today's entry (the book suggests journaling the effect).
+  const handleAppendToEntry = (text: string) => {
+    if (!editor || !text.trim()) return
+    editor.commands.focus('end')
+    editor.commands.insertContent({ type: 'paragraph', content: [{ type: 'text', text: text.trim() }] })
+  }
+
   const processTypeQueue = React.useCallback(() => {
     if (typeQueueRef.current.length === 0 || !editor) return
     // Insert the whole chunk in one call: char-by-char insertContent drops
@@ -483,6 +497,9 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
           <EchoesWidget />
 
           <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
+
+          <LoopNudge score={loopScore} wordCount={wordCount} hidden={!!preferences?.hide_calm_reset || resetDoneToday} onStart={() => setNudgeResetOpen(true)} />
+          <ThreeMinuteReset open={nudgeResetOpen} source="entry" onClose={() => setNudgeResetOpen(false)} onCompleted={() => setResetDoneToday(true)} onAppendToEntry={handleAppendToEntry} />
         </>
       )}
 
@@ -550,6 +567,8 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
         onClose={() => setFeedbackData(null)}
         arrivalMood={arrivalMood}
         onInsertTemplate={insertTemplateByKey}
+        onAppendToEntry={handleAppendToEntry}
+        onResetCompleted={() => setResetDoneToday(true)}
       />
 
       {showDeleteModal && (

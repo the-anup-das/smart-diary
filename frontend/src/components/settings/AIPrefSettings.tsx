@@ -113,6 +113,18 @@ export function AIPrefSettings() {
               checked={!!prefs?.hide_decisions} 
               onChange={(val: any) => updatePref('hide_decisions', val)} 
            />
+           <ToggleSwitch 
+              label="Hide 3-Minute Reset prompts" 
+              description="Hides the reset suggestions in the editor and after analysis. The practice stays available on the Energy page." 
+              checked={!!prefs?.hide_calm_reset} 
+              onChange={(val: any) => updatePref('hide_calm_reset', val)} 
+           />
+           <ToggleSwitch 
+              label="Hide Wellbeing Profile" 
+              description="Hides the six-axis profile radar in the entry feedback and on Insights." 
+              checked={!!prefs?.hide_wellbeing} 
+              onChange={(val: any) => updatePref('hide_wellbeing', val)} 
+           />
         </div>
 
 

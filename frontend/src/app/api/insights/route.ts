@@ -10,9 +10,10 @@ export async function GET(request: NextRequest) {
       headers['Cookie'] = `session=${sessionCookie}`;
     }
 
-    const range = request.nextUrl.searchParams.get('range') || 'week';
+    // Forward the whole query string (range, tz_offset, ...) rather than a fixed allowlist.
+    const query = request.nextUrl.search || '?range=week';
 
-    const res = await fetch(`${BACKEND_URL}/api/insights?range=${range}`, {
+    const res = await fetch(`${BACKEND_URL}/api/insights${query}`, {
       method: 'GET',
       headers,
       cache: 'no-store',

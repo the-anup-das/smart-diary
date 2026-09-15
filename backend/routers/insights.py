@@ -10,6 +10,8 @@ from .auth import verify_session
 import openai
 import os
 import re
+import builtins  # the endpoint parameter is named `range`, which shadows the built-in
+from wellbeing import WELLBEING_AXES, RUMINATION_TO_CALM, average_axes
 
 router = APIRouter()
 
@@ -54,10 +56,13 @@ def _get_previous_range(range_str: str):
 @router.get("/api/insights")
 def get_insights(
     range: str = Query(default="week", pattern="^(day|week|month|year|all)$"),
+    tz_offset: int = Query(default=0, ge=-840, le=840, description="Minutes east of UTC for the viewer; used for day and weekday bucketing"),
     user_id: str = Depends(verify_session),
     db: Session = Depends(get_db)
 ):
     start_date = _get_date_range(range)
+    offset = timedelta(minutes=tz_offset)
+    local_today = (datetime.utcnow() + offset).date()
     
     user = db.query(models.User).filter(models.User.id == user_id).first()
     prefs = user.preferences or {} if user else {}
@@ -149,13 +154,13 @@ def get_insights(
     
     # Compute streak (consecutive days with entries, counting backwards from today)
     streak = 0
-    all_user_entries = db.query(models.JournalEntry).filter(
+    all_user_entries = db.query(models.JournalEntry).options(joinedload(models.JournalEntry.feedback)).filter(
         models.JournalEntry.user_id == user_id,
         models.JournalEntry.is_deleted == False
     ).all()
     if all_user_entries:
-        check_date = datetime.utcnow().date()
-        entry_dates = set(e.date.date() for e in all_user_entries)
+        check_date = local_today
+        entry_dates = set((e.date + offset).date() for e in all_user_entries)
         while check_date in entry_dates:
             streak += 1
             check_date -= timedelta(days=1)
@@ -236,6 +241,113 @@ def get_insights(
             "detectedAt": loop.detected_at.strftime("%Y-%m-%d"),
         })
     
+    # --- Wellbeing profile: six capacities on one 0-100 scale, this period vs. the previous one ---
+    current_feedbacks = [e.feedback for e in entries if e.feedback]
+    previous_feedbacks = []
+    if prev_start and prev_end:
+        previous_feedbacks = [
+            pe.feedback for pe in (
+                db.query(models.JournalEntry)
+                .filter(
+                    models.JournalEntry.user_id == user_id,
+                    models.JournalEntry.date >= prev_start,
+                    models.JournalEntry.date < prev_end,
+                    models.JournalEntry.is_deleted == False,
+                )
+                .all()
+            ) if pe.feedback
+        ]
+    current_profile, profile_entries = average_axes(current_feedbacks)
+    previous_profile, previous_profile_entries = average_axes(previous_feedbacks)
+    wellbeing = {
+        "axes": [
+            {
+                "key": a["key"],
+                "label": a["label"],
+                "description": a["description"],
+                "value": current_profile.get(a["key"]),
+                "previous": previous_profile.get(a["key"]) if previous_profile_entries else None,
+            }
+            for a in WELLBEING_AXES
+        ],
+        "entries": profile_entries,
+        "previousEntries": previous_profile_entries,
+    }
+
+    # --- Patterns: 28-day heatmap, weekday rhythm and overthinking trend, in the viewer's local days ---
+    by_local_day: dict = {}
+    for e in all_user_entries:
+        d = (e.date + offset).date()
+        info = by_local_day.setdefault(d, {"mood": None, "battery": None, "rumination": None})
+        fb = e.feedback
+        if fb:
+            if fb.mood_score is not None:
+                info["mood"] = fb.mood_score
+            energy = fb.energy_data or {}
+            if isinstance(energy.get("battery_level"), (int, float)):
+                info["battery"] = round(energy["battery_level"])
+            if energy.get("rumination_level"):
+                info["rumination"] = str(energy["rumination_level"]).lower()
+    window_start_utc = datetime.combine(local_today - timedelta(days=27), datetime.min.time()) - offset
+    reset_days = {
+        (s.started_at + offset).date()
+        for s in db.query(models.CalmSession).filter(
+            models.CalmSession.user_id == user_id,
+            models.CalmSession.completed_at.isnot(None),
+            models.CalmSession.started_at >= window_start_utc,
+        ).all()
+        if s.started_at
+    }
+    last28 = []
+    for i in builtins.range(27, -1, -1):
+        d = local_today - timedelta(days=i)
+        info = by_local_day.get(d)
+        last28.append({
+            "date": d.isoformat(),
+            "weekday": d.strftime("%a"),
+            "hasEntry": info is not None,
+            "mood": info["mood"] if info else None,
+            "battery": info["battery"] if info else None,
+            "rumination": info["rumination"] if info else None,
+            "resetDone": d in reset_days,
+        })
+    weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    weekday_acc = [{"entries": 0, "mood": 0.0, "mood_n": 0, "calm": 0.0, "calm_n": 0} for _ in builtins.range(7)]
+    for d, info in by_local_day.items():
+        acc = weekday_acc[d.weekday()]
+        acc["entries"] += 1
+        if info["mood"] is not None:
+            acc["mood"] += info["mood"]
+            acc["mood_n"] += 1
+        if info["rumination"] in RUMINATION_TO_CALM:
+            acc["calm"] += RUMINATION_TO_CALM[info["rumination"]]
+            acc["calm_n"] += 1
+    weekday = [
+        {
+            "day": weekday_names[i],
+            "entries": acc["entries"],
+            "avgMood": round(acc["mood"] / acc["mood_n"], 1) if acc["mood_n"] else None,
+            "avgCalm": round(acc["calm"] / acc["calm_n"]) if acc["calm_n"] else None,
+        }
+        for i, acc in enumerate(weekday_acc)
+    ]
+    analysed28 = [d for d in last28 if d["mood"] is not None]
+    looping28 = [d for d in analysed28 if d["rumination"] in ("moderate", "high")]
+    patterns = {
+        "tzOffset": tz_offset,
+        "today": local_today.isoformat(),
+        "analysedDays": sum(1 for info in by_local_day.values() if info["mood"] is not None),
+        "last28": last28,
+        "weekday": weekday,
+        "overthinking": {
+            "analysedDays": len(analysed28),
+            "loopingDays": len(looping28),
+            "highDays": sum(1 for d in looping28 if d["rumination"] == "high"),
+            "resetDays": sum(1 for d in last28 if d["resetDone"]),
+            "loopingDaysWithReset": sum(1 for d in looping28 if d["resetDone"]),
+        },
+    }
+
     # Count totals
     total_open = db.query(models.OpenLoop).filter(
         models.OpenLoop.user_id == user_id,
@@ -269,6 +381,8 @@ def get_insights(
 
     return {
         "persistentLowMood": persistent_low_mood,
+        "wellbeing": wellbeing,
+        "patterns": patterns,
         "summary": {
             "totalEntries": len(entries),
             "analyzedEntries": analyzed_count,

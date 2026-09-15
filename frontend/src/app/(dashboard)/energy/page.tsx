@@ -11,6 +11,8 @@ import { OverthinkingMeter } from "@/components/energy/OverthinkingMeter"
 import { CircleOfControl } from "@/components/energy/CircleOfControl"
 import { MicroActions } from "@/components/energy/MicroActions"
 import { TomorrowFocus } from "@/components/energy/TomorrowFocus"
+import { CalmPracticeCard } from "@/components/calm/CalmPracticeCard"
+import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
 
 export default function EnergyPage() {
   const { data: rawData, error: swrError, isLoading: loading, mutate } = useSWR("/api/energy/today", fetcher)
@@ -20,6 +22,10 @@ export default function EnergyPage() {
     ? "Could not reach the server for your energy data." 
     : (!loading && !energyData ? rawData?.detail || "No analysis available today. Write an entry to see your energy." : null)
   const isNetworkError = !!swrError
+  const [resetOpen, setResetOpen] = useState(false)
+  const [calmRefresh, setCalmRefresh] = useState(0)
+  // Refresh the practice card and the battery (a completed reset credits it) when the overlay closes.
+  const closeReset = () => { setResetOpen(false); setCalmRefresh(k => k + 1); mutate() }
 
   const toggleActionState = (prev: any, id: string) => {
     const newActions = prev.micro_actions.map((a: any) =>
@@ -92,6 +98,8 @@ export default function EnergyPage() {
             </p>
           )}
         </div>
+        <CalmPracticeCard onStart={() => setResetOpen(true)} refreshKey={calmRefresh} />
+        <ThreeMinuteReset open={resetOpen} source="manual" onClose={closeReset} />
       </div>
     )
   }
@@ -119,10 +127,13 @@ export default function EnergyPage() {
         
         <DomainPanel />
         
-        <OverthinkingMeter 
-          level={energyData.rumination_level} 
-          coaching={energyData.rumination_coaching} 
+        <OverthinkingMeter
+          level={energyData.rumination_level}
+          coaching={energyData.rumination_coaching}
+          onStart={() => setResetOpen(true)}
         />
+
+        <CalmPracticeCard onStart={() => setResetOpen(true)} refreshKey={calmRefresh} />
         
         <CircleOfControl 
           controllables={energyData.controllables} 
@@ -135,6 +146,8 @@ export default function EnergyPage() {
         />
         
         <TomorrowFocus focus={energyData.tomorrow_focus} />
+
+        <ThreeMinuteReset open={resetOpen} source="manual" onClose={closeReset} ruminationCoaching={energyData.rumination_coaching} />
       </div>
     </div>
   )

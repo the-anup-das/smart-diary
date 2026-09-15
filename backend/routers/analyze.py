@@ -492,6 +492,13 @@ def get_energy_today(user_id: str = Depends(verify_session), db: Session = Depen
                 energy_data["micro_actions"] = cached_actions
                 energy_data["battery_level"] = min(100, max(0, energy_data.get("battery_level", 0) + bonus_diff))
                 
+    # A completed 3-Minute Reset today tops up the battery, the same way completed micro-actions do.
+    from .calm import completed_resets_today, CALM_ENERGY_BONUS
+    resets_today = completed_resets_today(user_id, db)
+    if resets_today:
+        energy_data["battery_level"] = min(100, round(energy_data.get("battery_level", 0) + CALM_ENERGY_BONUS, 1))
+    energy_data["calm_resets_today"] = resets_today
+
     return {"success": True, "energy_data": energy_data}
 
 @router.patch("/api/energy/actions/{action_id}")
@@ -571,16 +578,26 @@ def get_user_usage(user_id: str = Depends(verify_session), db: Session = Depends
     # Pricing for GPT-4o-mini (as of April 2024)
     # Input: $0.15 / 1M tokens
     # Output: $0.60 / 1M tokens
-    input_cost = (stats.prompt or 0) * (0.15 / 1_000_000)
-    output_cost = (stats.completion or 0) * (0.60 / 1_000_000)
+    # The 3-Minute Reset planner (routers/calm.py) also spends tokens; include them so the dashboard stays honest.
+    calm_stats = db.query(
+        func.sum(models.CalmSession.prompt_tokens).label("prompt"),
+        func.sum(models.CalmSession.completion_tokens).label("completion"),
+        func.sum(models.CalmSession.total_tokens).label("total"),
+    ).filter(models.CalmSession.user_id == user_id).first()
+    prompt_tokens = (stats.prompt or 0) + (calm_stats.prompt or 0)
+    completion_tokens = (stats.completion or 0) + (calm_stats.completion or 0)
+    total_tokens = (stats.total or 0) + (calm_stats.total or 0)
+
+    input_cost = prompt_tokens * (0.15 / 1_000_000)
+    output_cost = completion_tokens * (0.60 / 1_000_000)
     total_cost = input_cost + output_cost
     
     return {
         "success": True,
         "usage": {
-            "prompt_tokens": stats.prompt or 0,
-            "completion_tokens": stats.completion or 0,
-            "total_tokens": stats.total or 0,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
             "analysis_count": stats.count or 0,
             "estimated_cost_usd": round(total_cost, 4)
         }

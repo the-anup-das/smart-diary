@@ -1,15 +1,19 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash, GitMerge, ArrowRight } from "lucide-react"
+import { CheckCircle2, ShieldAlert, Sparkles, BrainCircuit, PenTool, Hash, GitMerge, ArrowRight, Wind, Timer, Activity } from "lucide-react"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 import { HelpfulnessVote } from "@/components/ui/HelpfulnessVote"
 import { SupportCard } from "@/components/wellbeing/SupportCard"
 import { BreathingExercise } from "@/components/wellbeing/BreathingExercise"
+import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
+import { WellbeingRadar } from "@/components/insights/WellbeingRadar"
+import { profileFromFeedback, hasProfile } from "@/lib/wellbeing"
 
-export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrivalMood = null, onInsertTemplate }: { feedback: any, preferences?: any, onClose?: () => void, arrivalMood?: number | null, onInsertTemplate?: (key: string) => void }) {
+export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrivalMood = null, onInsertTemplate, onAppendToEntry, onResetCompleted }: { feedback: any, preferences?: any, onClose?: () => void, arrivalMood?: number | null, onInsertTemplate?: (key: string) => void, onAppendToEntry?: (text: string) => void, onResetCompleted?: () => void }) {
   const router = useRouter()
   const [creatingDecision, setCreatingDecision] = React.useState(false)
   const [supportDismissed, setSupportDismissed] = React.useState(false)
+  const [showReset, setShowReset] = React.useState(false)
 
   if (!feedback) return null;
 
@@ -26,6 +30,8 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
       </div>
     )
   }
+
+  const todayProfile = profileFromFeedback(feedback)
 
   const handleStartDecision = async () => {
     if (!feedback.detectedDecision) return
@@ -92,6 +98,42 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
         </div>
       )}
 
+      {/* Overthinking Reset CTA (rumination detected by the energy analysis) */}
+      {!preferences?.hide_calm_reset && ["moderate", "high"].includes(String(feedback.energyData?.rumination_level || "").toLowerCase()) && (
+        <div className="p-6 rounded-2xl bg-gradient-to-r from-sky-500/10 to-teal-500/10 border border-sky-500/30 backdrop-blur-xl shadow-lg relative overflow-hidden group">
+          <div className="absolute -right-10 -top-10 w-40 h-40 bg-sky-500/10 rounded-full blur-3xl group-hover:bg-sky-500/20 transition-all" />
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center">
+                <Wind className="w-5 h-5 mr-2 text-sky-500" />
+                Your mind is looping today
+              </h3>
+              {feedback.energyData?.rumination_coaching && (
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 max-w-md">{feedback.energyData.rumination_coaching}</p>
+              )}
+              <p className="text-xs text-gray-500 mt-2">
+                Three minutes: one of breathing, one of stillness, one of picturing today going calmly. Nothing to solve.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowReset(true)}
+              className="flex items-center space-x-2 px-5 py-2.5 bg-sky-600 text-white rounded-xl font-medium hover:bg-sky-700 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
+            >
+              <Timer className="w-4 h-4" />
+              <span>Take a 3-minute reset</span>
+            </button>
+          </div>
+        </div>
+      )}
+      <ThreeMinuteReset
+        open={showReset}
+        source="entry"
+        onClose={() => setShowReset(false)}
+        onCompleted={onResetCompleted}
+        onAppendToEntry={onAppendToEntry}
+        ruminationCoaching={feedback.energyData?.rumination_coaching}
+      />
+
       {/* Top Level Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {!preferences?.hide_mood && (
@@ -157,6 +199,15 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
 
       {feedback.moodScore != null && feedback.moodScore <= 4 && !feedback.distressFlag && (
         <LowMoodSupport onInsertTemplate={onInsertTemplate} onCloseDashboard={onClose} />
+      )}
+
+      {/* Wellbeing Profile for this entry (period averages live on the Insights page) */}
+      {!preferences?.hide_wellbeing && hasProfile(todayProfile) && (
+        <GlassCard>
+          <h3 className="font-semibold mb-1 text-gray-900 dark:text-gray-100 flex items-center"><Activity className="w-5 h-5 mr-2 text-primary" /> Today's Wellbeing Profile</h3>
+          <p className="text-xs text-gray-500 mb-5">Six capacities from this entry on one scale, higher is better. Your averages over time are on the Insights page.</p>
+          <WellbeingRadar axes={todayProfile} />
+        </GlassCard>
       )}
 
       {/* Grammar Corrections */}
