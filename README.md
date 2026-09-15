@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docker.com)
 
-[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Decision Swarm](#-decision-swarm-architecture) · [Getting Started](#-getting-started)
+[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Decision Swarm](#-decision-swarm-architecture) · [3-Minute Reset](#-3-minute-reset-overthinking-antidote) · [Getting Started](#-getting-started)
 
 </div>
 
@@ -96,6 +96,8 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 - **Weekly AI Review:** a narrative retrospective of your week — wins, challenges, themes, and next-week focus.
 - **On This Day + mood heatmap:** date-based memory resurfacing and a year-at-a-glance mood calendar.
 - **Find Your Energy:** mental battery, Stoic Circle of Control reframing, rumination coaching, micro-actions.
+- **3-Minute Reset:** detects overthinking in your entries and guides a three-minute breathing, stillness and visualisation practice, personalised to the loop you are stuck in and tracked like a habit.
+- **Wellbeing Profile and patterns:** a six-axis radar of mood, energy, calm, agency, outward focus and clarity, plus a 28-day mood heatmap, weekly rhythm and overthinking trend on Insights.
 
 **Ask**
 - **Chat with your journal (RAG):** streaming answers grounded in your own entries with clickable date citations; conversations are saved and resumable.
@@ -125,6 +127,33 @@ Notebook goes beyond text logs by visualizing your mental energy state:
 - **Circle of Control:** An interactive component that helps you separate controllable vs. uncontrollable factors using Stoic reframing techniques.
 - **Attention Heatmap:** Tracks where your mental energy went over the last 7 days (e.g., Health, Finances, Social).
 - **Tomorrow's Recharge Strategy:** AI-generated forward-looking advice to build or protect energy for the following day.
+
+---
+
+## 🧘 3-Minute Reset (Overthinking Antidote)
+
+Overthinking is detected in two layers and answered with a guided practice based on the 1-1-1 tool from Dr. Saloni Singh's *How to Stop Overthinking in 3 Minutes*:
+
+- **While you write:** a quiet nudge appears when the entry itself starts to loop ("what if", "should have", "over and over").
+- **After Save & Reflect:** the analysis rates rumination for the entry; at moderate or high, a card offers the reset.
+- **The reset:** one minute of affectionate breathing, one of complete stillness, one of visualisation closed with affirmations. Only the third minute uses AI, which tailors it to the specific loop in today's entry. A soft chime marks each minute so you can keep your eyes closed.
+- **Tracked like a habit:** rate how busy your mind is before and after, keep a streak on the Energy page, and drop a one-line reflection into the entry. A completed reset also tops up the energy battery.
+- **Seen over time:** the Insights page shows an Overthinking Trend across the last four weeks next to the days you practised, a Weekly Rhythm of mood by weekday, a 28-day mood heatmap, and a Wellbeing Profile radar compared with the previous period.
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/reset-nudge.png" alt="Nudge shown while a looping entry is being written" width="100%"><br><sub>The nudge while a looping entry is being written</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/reset-feedback-card.png" alt="Feedback card offering the reset after analysis" width="100%"><br><sub>After analysis: the card appears when rumination is moderate or high</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/reset-checkin.png" alt="Check-in screen naming the loop" width="100%"><br><sub>Check-in: the loop named from today's entry, and a before rating</sub></td>
+    <td align="center"><img src="docs/screenshots/reset-visualise.png" alt="Visualisation minute with personalised lines" width="100%"><br><sub>Minute three: visualisation tailored to the entry</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/reset-checkout.png" alt="Check-out screen with after rating and reflection" width="100%"><br><sub>Check-out: after rating, what to let go of, what matters</sub></td>
+    <td align="center"><img src="docs/screenshots/reset-energy-card.png" alt="Energy page card with streak and 28-day strip" width="100%"><br><sub>Energy page: streak, 28-day strip and recent reflections</sub></td>
+  </tr>
+</table>
 
 ---
 

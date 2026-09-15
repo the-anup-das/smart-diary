@@ -41,7 +41,7 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-from routers import auth, entries, analyze, insights, users, decisions, voice, chat, feedback, ai_config
+from routers import auth, entries, analyze, insights, users, decisions, voice, chat, feedback, ai_config, calm
 
 app.include_router(auth.router)
 app.include_router(entries.router)
@@ -53,6 +53,7 @@ app.include_router(voice.router)
 app.include_router(chat.router)
 app.include_router(feedback.router)
 app.include_router(ai_config.router)
+app.include_router(calm.router)
 @app.get("/api/health")
 async def health_check():
     return {"status": "operational", "engine": "FastAPI"}

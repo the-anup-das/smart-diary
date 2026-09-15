@@ -91,7 +91,13 @@ def search_memories(user_id: str, query: str, limit: int = 8) -> str:
         return ""
     
     try:
-        results = memory.search(query, user_id=user_id, limit=limit)
+        # mem0 changed its API: older releases take user_id=, newer ones want filters={"user_id": ...}.
+        try:
+            results = memory.search(query, user_id=user_id, limit=limit)
+        except (ValueError, TypeError) as api_change:
+            if "filters" not in str(api_change):
+                raise
+            results = memory.search(query, filters={"user_id": user_id}, limit=limit)
         memories = results.get("results", [])
         
         if not memories:
@@ -117,7 +123,12 @@ def get_all_memories(user_id: str) -> list:
     if not memory:
         return []
     try:
-        result = memory.get_all(user_id=user_id)
+        try:
+            result = memory.get_all(user_id=user_id)
+        except (ValueError, TypeError) as api_change:
+            if "filters" not in str(api_change):
+                raise
+            result = memory.get_all(filters={"user_id": user_id})
         return result.get("results", [])
     except Exception as e:
         print(f"[MemoryService] get_all failed: {e}", flush=True)

@@ -33,9 +33,26 @@ class OpenLoopImport(BaseModel):
     status: str
     detected_at: Optional[str] = None
 
+class CalmSessionImport(BaseModel):
+    entry_id: Optional[str] = None
+    source: Optional[str] = "manual"
+    rumination_level: Optional[str] = None
+    rumination_type: Optional[str] = None
+    loop_thought: Optional[str] = None
+    plan: Optional[Any] = None
+    personalized: Optional[bool] = False
+    mind_before: Optional[int] = None
+    mind_after: Optional[int] = None
+    steps_completed: Optional[int] = 0
+    duration_seconds: Optional[int] = 0
+    note: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
 class ImportPayload(BaseModel):
     entries: List[EntryImport]
     openLoops: List[OpenLoopImport]
+    calmSessions: Optional[List[CalmSessionImport]] = None
 
 @router.get("/api/users/me")
 def get_me(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
@@ -92,7 +109,8 @@ def export_data(user_id: str = Depends(verify_session), db: Session = Depends(ge
             "email": user.email,
         },
         "entries": [],
-        "openLoops": []
+        "openLoops": [],
+        "calmSessions": []
     }
     
     for entry in entries:
@@ -122,6 +140,25 @@ def export_data(user_id: str = Depends(verify_session), db: Session = Depends(ge
             "detected_at": loop.detected_at.isoformat() if loop.detected_at else None
         })
         
+    calm_sessions = db.query(models.CalmSession).filter(models.CalmSession.user_id == user_id).all()
+    for s in calm_sessions:
+        export_payload["calmSessions"].append({
+            "entry_id": s.entry_id,
+            "source": s.source,
+            "rumination_level": s.rumination_level,
+            "rumination_type": s.rumination_type,
+            "loop_thought": s.loop_thought,
+            "plan": s.plan,
+            "personalized": bool(s.personalized),
+            "mind_before": s.mind_before,
+            "mind_after": s.mind_after,
+            "steps_completed": s.steps_completed,
+            "duration_seconds": s.duration_seconds,
+            "note": s.note,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+        })
+
     return export_payload
 
 @router.post("/api/users/import")
@@ -181,8 +218,38 @@ def import_data(payload: ImportPayload, user_id: str = Depends(verify_session), 
         )
         db.add(new_loop)
 
+    def _parse(ts):
+        try:
+            return datetime.fromisoformat(ts) if ts else None
+        except Exception:
+            return None
+
+    for s in (payload.calmSessions or []):
+        db.add(models.CalmSession(
+            user_id=user_id,
+            entry_id=entry_id_map.get(s.entry_id) if s.entry_id else None,
+            source=s.source or "manual",
+            rumination_level=s.rumination_level,
+            rumination_type=s.rumination_type,
+            loop_thought=s.loop_thought,
+            plan=s.plan,
+            personalized=bool(s.personalized),
+            mind_before=s.mind_before,
+            mind_after=s.mind_after,
+            steps_completed=s.steps_completed or 0,
+            duration_seconds=s.duration_seconds or 0,
+            note=s.note,
+            started_at=_parse(s.started_at) or datetime.utcnow(),
+            completed_at=_parse(s.completed_at),
+        ))
+
     db.commit()
-    return {"success": True, "entries_imported": len(payload.entries), "loops_imported": len(payload.openLoops)}
+    return {
+        "success": True,
+        "entries_imported": len(payload.entries),
+        "loops_imported": len(payload.openLoops),
+        "calm_sessions_imported": len(payload.calmSessions or []),
+    }
 
 class MoodCheckin(BaseModel):
     mood: int  # 1-10, how the user feels *before* writing

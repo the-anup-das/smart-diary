@@ -6,12 +6,20 @@ import { VocabChart } from "@/components/insights/VocabChart"
 import { TargetsWidget } from "@/components/insights/TargetsWidget"
 import { StyleInsights } from "@/components/insights/StyleInsights"
 import { WeeklyReview } from "@/components/insights/WeeklyReview"
-import { Target, TrendingUp, TrendingDown, Minus, Calendar, Brain, ListTodo, Activity, Zap, MessageSquare, Sun, BookOpen, RefreshCw, Sparkles, PenTool, BarChart2, Pin, Check, X, Flame } from "lucide-react"
+import { WellbeingRadar } from "@/components/insights/WellbeingRadar"
+import { MoodHeatmap, type PatternDay } from "@/components/insights/MoodHeatmap"
+import { WeeklyRhythm, type WeekdayStat } from "@/components/insights/WeeklyRhythm"
+import { OverthinkingTrend, type OverthinkingStats } from "@/components/insights/OverthinkingTrend"
+import type { WellbeingAxis } from "@/lib/wellbeing"
+import { Target, TrendingUp, TrendingDown, Minus, Calendar, Brain, ListTodo, Activity, Zap, MessageSquare, Sun, BookOpen, RefreshCw, Sparkles, PenTool, BarChart2, Pin, Check, X, Flame, Repeat, Wind } from "lucide-react"
 import useSWR from "swr"
 import { fetcher } from "@/lib/fetcher"
 import { getMoodTier, getSentimentStyle } from "@/lib/mood"
 
 type TimeRange = "day" | "week" | "month" | "year" | "all"
+
+const PERIOD_LABEL: Record<TimeRange, string> = { day: "Today", week: "This week", month: "This month", year: "This year", all: "All time" }
+const PREVIOUS_LABEL: Record<TimeRange, string | null> = { day: "Yesterday", week: "Previous week", month: "Previous month", year: "Previous year", all: null }
 
 interface OpenLoopItem {
   id: string
@@ -44,6 +52,19 @@ interface InsightsData {
     totalResolved: number
   }
   targets: any
+  wellbeing?: {
+    axes: WellbeingAxis[]
+    entries: number
+    previousEntries: number
+  }
+  patterns?: {
+    tzOffset: number
+    today: string
+    analysedDays: number
+    last28: PatternDay[]
+    weekday: WeekdayStat[]
+    overthinking: OverthinkingStats
+  }
   writingStyle?: {
     avgSelfFocus: number
     highlights: {
@@ -82,7 +103,8 @@ export default function InsightsPage() {
   const [range, setRange] = React.useState<TimeRange>("week")
   
   const { data, error: swrError, isLoading: loading, mutate } = useSWR<InsightsData>(
-    `/api/insights?range=${range}`,
+    // Days and weekdays are bucketed in the viewer's local time.
+    `/api/insights?range=${range}&tz_offset=${-new Date().getTimezoneOffset()}`,
     fetcher,
     { keepPreviousData: true }
   )
@@ -148,6 +170,38 @@ export default function InsightsPage() {
       {/* Skeleton Loading */}
       {loading && <SkeletonDashboard />}
 
+      {/* Patterns: independent of the range selector, always the last 28 days and all reflected entries */}
+      {!loading && data?.patterns && data.patterns.analysedDays > 0 && (
+        <div className="space-y-6 mb-6">
+          <GlassCard>
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center space-x-2">
+              <Calendar className="w-5 h-5 text-primary" />
+              <span>Last 28 Days</span>
+            </h3>
+            <p className="text-xs text-gray-500 mb-4">Each day coloured by that entry's mood. A dot marks a completed 3-Minute Reset.</p>
+            <MoodHeatmap days={data.patterns.last28} />
+          </GlassCard>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <GlassCard>
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center space-x-2">
+                <Repeat className="w-5 h-5 text-primary" />
+                <span>Weekly Rhythm</span>
+              </h3>
+              <p className="text-xs text-gray-500 mb-4">Average mood by weekday across all reflected entries.</p>
+              <WeeklyRhythm weekday={data.patterns.weekday} analysedDays={data.patterns.analysedDays} />
+            </GlassCard>
+            <GlassCard>
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center space-x-2">
+                <Wind className="w-5 h-5 text-sky-500" />
+                <span>Overthinking Trend</span>
+              </h3>
+              <p className="text-xs text-gray-500 mb-4">Rumination on each reflected day over the last four weeks, and the days you did the reset.</p>
+              <OverthinkingTrend days={data.patterns.last28} stats={data.patterns.overthinking} />
+            </GlassCard>
+          </div>
+        </div>
+      )}
+
       {/* Empty State */}
       {!loading && data && data.summary.analyzedEntries === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -176,6 +230,33 @@ export default function InsightsPage() {
             <AnimatedStatCard icon={<Brain className="w-5 h-5 text-blue-500" />} label="Vocabulary" target={data.summary.totalVocabulary} />
             <StreakCard streak={data.summary.currentStreak} />
           </div>
+
+          {/* Wellbeing Profile: six capacities on one scale, this period against the previous one */}
+          {data.wellbeing && (
+            <GlassCard>
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1 flex items-center space-x-2">
+                <Activity className="w-5 h-5 text-primary" />
+                <span>Wellbeing Profile</span>
+              </h3>
+              <p className="text-xs text-gray-500 mb-5">
+                Six capacities on one scale, higher is better, averaged over {data.wellbeing.entries} analysed {data.wellbeing.entries === 1 ? "entry" : "entries"}.
+                {data.wellbeing.previousEntries > 0 && PREVIOUS_LABEL[range] ? ` The dashed shape is ${PREVIOUS_LABEL[range]!.toLowerCase()}.` : ""}
+              </p>
+              {data.wellbeing.entries >= 2 ? (
+                <WellbeingRadar
+                  axes={data.wellbeing.axes}
+                  currentLabel={PERIOD_LABEL[range]}
+                  compareLabel={data.wellbeing.previousEntries > 0 ? PREVIOUS_LABEL[range] : null}
+                />
+              ) : (
+                <p className="text-sm text-gray-500">
+                  {range === "day"
+                    ? "Today's profile sits in the AI Insights of your entry. Pick Week or longer to see the average shape."
+                    : "Reflect on at least two entries in this period to see the profile."}
+                </p>
+              )}
+            </GlassCard>
+          )}
 
           {data.persistentLowMood && <CareNudge />}
 

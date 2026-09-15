@@ -1,15 +1,17 @@
 "use client"
 import React from "react"
-import { BrainCircuit, Wind } from "lucide-react"
+import { BrainCircuit, Wind, Timer } from "lucide-react"
 import { InfoTooltip } from "@/components/ui/InfoTooltip"
 import { BreathingExercise } from "@/components/wellbeing/BreathingExercise"
 
 interface OverthinkingMeterProps {
   level: "low" | "moderate" | "high" | string
   coaching: string
+  /** Opens the 3-Minute Reset; shown next to the breather when rumination is moderate or high. */
+  onStart?: () => void
 }
 
-export function OverthinkingMeter({ level, coaching }: OverthinkingMeterProps) {
+export function OverthinkingMeter({ level, coaching, onStart }: OverthinkingMeterProps) {
   const [breathing, setBreathing] = React.useState(false)
   let indicatorColor = "bg-green-500"
   let bgColor = "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20"
@@ -46,12 +48,22 @@ export function OverthinkingMeter({ level, coaching }: OverthinkingMeterProps) {
           "{coaching || "Your mental clarity looks good today. Keep focusing on what's in your control."}"
         </p>
         {level.toLowerCase() !== "low" && (
-          <button
-            onClick={() => setBreathing(true)}
-            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 text-sky-700 dark:text-sky-300 text-xs font-medium hover:bg-sky-500/20 transition-colors cursor-pointer"
-          >
-            <Wind className="w-3.5 h-3.5" /> Interrupt the loop — 60-second breather
-          </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={() => setBreathing(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 text-sky-700 dark:text-sky-300 text-xs font-medium hover:bg-sky-500/20 transition-colors cursor-pointer"
+            >
+              <Wind className="w-3.5 h-3.5" /> Interrupt the loop — 60-second breather
+            </button>
+            {onStart && (
+              <button
+                onClick={onStart}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-600 text-white text-xs font-medium hover:bg-sky-700 transition-colors cursor-pointer"
+              >
+                <Timer className="w-3.5 h-3.5" /> Take a 3-minute reset
+              </button>
+            )}
+          </div>
         )}
       </div>
       {breathing && <BreathingExercise onClose={() => setBreathing(false)} />}

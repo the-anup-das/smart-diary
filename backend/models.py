@@ -124,3 +124,35 @@ class AIFeedback(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
+
+class CalmSession(Base):
+    """One run of the 3-Minute Reset (see routers/calm.py).
+
+    A session is created when the user starts the practice, either from the
+    overthinking card shown after an entry is analysed ("entry") or from the
+    Energy page ("manual"). Progress is patched in as the user moves through
+    the three one-minute steps so an abandoned tab still leaves a record.
+    """
+    __tablename__ = "calm_sessions"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    entry_id = Column(String, ForeignKey("journal_entries.id", ondelete="SET NULL"), nullable=True)
+    source = Column(String, default="manual")           # "entry" | "manual"
+    rumination_level = Column(String, nullable=True)    # snapshot of energy_data.rumination_level at start
+    rumination_type = Column(String, nullable=True)     # past_regret | future_worry | social_comparison | self_judgment | information_overload | mixed
+    loop_thought = Column(Text, nullable=True)          # the thought the writer keeps circling, paraphrased by the planner
+    plan = Column(JSON, nullable=True)                  # generated minute-three script (visualisation, affirmations, ...)
+    personalized = Column(Boolean, default=False)       # False when the generic script was used
+    source_hash = Column(String, nullable=True)         # content_hash of the entry the plan was built from (lets us reuse it)
+    mind_before = Column(Integer, nullable=True)        # 1 (still) .. 5 (racing), asked before the practice
+    mind_after = Column(Integer, nullable=True)         # same scale, asked after
+    steps_completed = Column(Integer, default=0)        # 0..3: breathing, stillness, visualisation
+    duration_seconds = Column(Integer, default=0)
+    note = Column(Text, nullable=True)                  # optional one-line reflection written after the practice
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
+    started_at = Column(DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
