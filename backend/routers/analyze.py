@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime
 from pydantic import BaseModel, Field
+from typing import Literal
 from database import get_db
 import models
 from .auth import verify_session
@@ -52,6 +53,22 @@ class EnergyAnalysisSchema(BaseModel):
     microActions: list[EnergyMicroAction] = Field(description="Exactly 3 actionable micro-actions personalized to their dominant topics and drainers.")
     tomorrowFocus: str = Field(description="A 1-2 sentence strategy to build or protect energy for the next day, based on today's drainers.")
 
+class StimulationBehaviour(BaseModel):
+    behaviour: str = Field(description="Short label for the reward-seeking behaviour mentioned, e.g. 'late-night scrolling', 'binge-watching', 'online shopping'.")
+    category: Literal["screens", "social_media", "video", "gaming", "porn", "gambling", "food", "shopping", "substances", "other"]
+    trigger: str = Field(description="What led to it, in a few words (boredom, loneliness, avoiding a task, stress, habit, tiredness). 'unclear' if not stated.")
+    timeOfDay: Literal["morning", "afternoon", "evening", "night", "unknown"]
+    lostControl: bool = Field(description="True when the writer describes going past what they intended: 'could not stop', 'one more', 'until 2am', 'lost hours'.")
+
+class StimulationSignalsSchema(BaseModel):
+    behaviours: list[StimulationBehaviour] = Field(description="Compulsive or high-stimulation behaviours the entry actually mentions. Empty when none are mentioned. Never infer.")
+    cravingLanguage: bool = Field(description="True when the writer describes craving, urges or checking compulsively.")
+    afterState: Literal["none", "guilt", "flat", "restless", "fine"] = Field(description="How the writer felt after the behaviour, if described. 'none' when no behaviour was mentioned.")
+    lowMotivation: bool = Field(description="True when the writer says ordinary activities feel pointless or nothing feels enjoyable.")
+    sleepDisrupted: bool = Field(description="True when a behaviour cut into sleep.")
+    displaced: list[str] = Field(description="Things the writer says were skipped or delayed because of the behaviour. Empty if none.")
+    load: int = Field(ge=0, le=3, description="Overall stimulation load in this entry: 0 none mentioned, 1 mild, 2 notable (lost time or guilt), 3 heavy (lost control, sleep or duties affected).")
+
 class FeedbackReportSchema(BaseModel):
     moodScore: int = Field(ge=1, le=10, description="Score the emotional state from 1 (Despair) to 10 (Euphoric).")
     sentiment: str = Field(description="A single word describing the core sentiment (Stressed, Joyful, Neutral, Anxious, Focused, Calm, etc).")
@@ -68,6 +85,7 @@ class FeedbackReportSchema(BaseModel):
     emotionLabels: list[str] = Field(description="1-3 precise emotion words the writer is expressing (e.g. 'overwhelmed', 'wistful', 'resentful', 'proud'). Granular words, not generic ones like 'bad' or 'sad' unless truly the best fit.")
     distressFlag: bool = Field(description="True ONLY when the entry contains clear signals of self-harm, suicidal thoughts, or acute crisis (e.g. hopelessness about being alive, wanting to disappear or end things). Ordinary sadness, stress, anger, or venting must be False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
+    stimulation: StimulationSignalsSchema = Field(description="Reward-seeking and overstimulation signals, only from what the entry explicitly says.")
 
 
 def _tokenize(text: str) -> set[str]:
@@ -115,7 +133,11 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         "Generate 3 topic-tailored micro-actions and a 'tomorrowFocus' strategy.\n"
         "4. Emotions: name 1-3 precise emotion words the writer expresses (granularity over generic terms).\n"
         "5. Safety: set distressFlag true ONLY for clear self-harm/suicidal/acute-crisis signals — "
-        "never for ordinary sadness, stress, or venting."
+        "never for ordinary sadness, stress, or venting.\n"
+        "6. Stimulation: record compulsive or high-stimulation behaviours ONLY when the entry mentions them "
+        "(scrolling, social media, video, gaming, porn, gambling, food, shopping, substances), with trigger, time of day, "
+        "loss of control, the after-state, sleep impact and what was displaced. If nothing is mentioned, return an empty "
+        "list, afterState 'none' and load 0. Never diagnose; describe behaviour."
     )
     custom_persona = preferences.get("custom_persona_prompt", "")
     if custom_persona:
@@ -151,6 +173,7 @@ def _build_response(feedback, cached: bool = False):
             "id": feedback.id,
             "moodScore": feedback.mood_score,
             "energyData": feedback.energy_data,
+            "stimulation": feedback.stimulation_data,
             "sentiment": feedback.sentiment,
             "grammarScore": feedback.grammar_score,
             "grammarFixes": feedback.grammar_fixes,
@@ -300,6 +323,7 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "emotion_labels": parsed.emotionLabels[:3],
             "distress_flag": parsed.distressFlag,
             "energy_data": energy_data,
+            "stimulation_data": parsed.stimulation.model_dump(),
             "prompt_tokens": usage["prompt_tokens"],
             "completion_tokens": usage["completion_tokens"],
             "total_tokens": usage["total_tokens"]

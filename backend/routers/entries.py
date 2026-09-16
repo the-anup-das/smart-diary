@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 from datetime import datetime
 from pydantic import BaseModel
 from database import get_db
 import models
 from .auth import verify_session
+import re as _re
 
 router = APIRouter()
 
@@ -353,3 +354,56 @@ def get_bright_spot(user_id: str = Depends(verify_session), db: Session = Depend
                 "snippet": text[:220].strip(),
             }
     return {"found": False}
+
+
+@router.get("/api/entries/vocabulary")
+def get_vocabulary(
+    limit: int = Query(default=4000, ge=100, le=10000),
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """
+    Words the writer has used before, most frequent first, for the editor's Tab completion.
+    Only words of four letters or more are worth completing; a trailing possessive is folded
+    into the base word so "manager's" strengthens "manager".
+    """
+    rows = db.query(models.JournalEntry.content).filter(
+        models.JournalEntry.user_id == user_id,
+        models.JournalEntry.is_deleted == False,
+    ).all()
+    counts: dict = {}
+    for (content,) in rows:
+        text = _re.sub(r"<[^>]*>?", " ", content or "")
+        for token in _re.findall(r"[A-Za-z][A-Za-z']{3,}", text):
+            word = _re.sub(r"'s?$", "", token.lower())
+            if len(word) >= 4:
+                counts[word] = counts.get(word, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+    return {"words": [{"w": w, "n": n} for w, n in ranked], "total": len(counts)}
+
+
+@router.get("/api/entries/streak")
+def get_streak(
+    tz_offset: int = Query(default=0, ge=-840, le=840, description="Minutes east of UTC for the viewer"),
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """Consecutive days with an entry, in the viewer's local days, and whether today has one yet."""
+    from datetime import timedelta as _timedelta
+    offset = _timedelta(minutes=tz_offset)
+    today = (datetime.utcnow() + offset).date()
+    days = {
+        (d + offset).date()
+        for (d,) in db.query(models.JournalEntry.date).filter(
+            models.JournalEntry.user_id == user_id,
+            models.JournalEntry.is_deleted == False,
+        ).all()
+        if d
+    }
+    wrote_today = today in days
+    streak = 0
+    cursor = today if wrote_today else today - _timedelta(days=1)
+    while cursor in days:
+        streak += 1
+        cursor -= _timedelta(days=1)
+    return {"streak": streak, "wroteToday": wrote_today}

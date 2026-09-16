@@ -8,6 +8,8 @@ import { BreathingExercise } from "@/components/wellbeing/BreathingExercise"
 import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
 import { WellbeingRadar } from "@/components/insights/WellbeingRadar"
 import { profileFromFeedback, hasProfile } from "@/lib/wellbeing"
+import Link from "next/link"
+import { Crosshair } from "lucide-react"
 
 export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrivalMood = null, onInsertTemplate, onAppendToEntry, onResetCompleted }: { feedback: any, preferences?: any, onClose?: () => void, arrivalMood?: number | null, onInsertTemplate?: (key: string) => void, onAppendToEntry?: (text: string) => void, onResetCompleted?: () => void }) {
   const router = useRouter()
@@ -134,6 +136,29 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
         ruminationCoaching={feedback.energyData?.rumination_coaching}
       />
 
+      {/* Stimulation spike: only when this entry mentions a compulsive habit with real cost */}
+      {!preferences?.hide_focus && (feedback.stimulation?.load ?? 0) >= 2 && (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-teal-500/10 to-emerald-500/10 border border-teal-500/30 backdrop-blur-xl shadow-lg">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center">
+                <Crosshair className="w-5 h-5 mr-2 text-teal-500" />
+                A stimulation spike in today's entry
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 max-w-lg">
+                {(feedback.stimulation.behaviours || []).map((b: any) => b.behaviour).filter(Boolean).join(", ") || "A habit that gives a quick hit"}
+                {feedback.stimulation.afterState && feedback.stimulation.afterState !== "none" ? `, followed by feeling ${feedback.stimulation.afterState}` : ""}
+                {feedback.stimulation.displaced?.length ? `. It pushed aside: ${feedback.stimulation.displaced.slice(0, 3).join(", ")}` : ""}.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">One entry is a data point, not a verdict. If it keeps showing up, the Focus Reset is a structured way out.</p>
+            </div>
+            <Link href="/focus" className="flex items-center space-x-2 px-5 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-colors whitespace-nowrap flex-shrink-0">
+              <span>Open Focus Reset</span>
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* Top Level Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {!preferences?.hide_mood && (
@@ -188,9 +213,17 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
             </div>
             <div className="flex items-end justify-between">
               <p className="text-4xl font-bold text-gray-900 dark:text-gray-100">{feedback.grammarScore}<span className="text-xl text-gray-500">/10</span></p>
-              <div className="px-3 py-1 bg-black/5 dark:bg-white/5 rounded-full text-sm font-medium text-gray-600 dark:text-gray-300">
-                {Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length === 0 ? "Perfect" : `${feedback.grammarFixes?.length || 0} Fixes`}
-              </div>
+              {Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length > 0 ? (
+                <button
+                  onClick={() => document.getElementById("grammar-polish")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  title="Jump to the suggested fixes"
+                  className="px-3 py-1 bg-black/5 dark:bg-white/5 hover:bg-primary/10 hover:text-primary rounded-full text-sm font-medium text-gray-600 dark:text-gray-300 transition-colors cursor-pointer underline-offset-2 hover:underline"
+                >
+                  {feedback.grammarFixes.length} {feedback.grammarFixes.length === 1 ? "fix" : "fixes"} ↓
+                </button>
+              ) : (
+                <div className="px-3 py-1 bg-black/5 dark:bg-white/5 rounded-full text-sm font-medium text-gray-600 dark:text-gray-300">Perfect</div>
+              )}
             </div>
             <ProgressBar value={feedback.grammarScore * 10} />
           </GlassCard>
@@ -213,7 +246,7 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
       {/* Grammar Corrections */}
       {!preferences?.hide_grammar && Array.isArray(feedback.grammarFixes) && feedback.grammarFixes.length > 0 && (
         <GlassCard>
-          <h3 className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center"><CheckCircle2 className="w-4 h-4 mr-2 text-green-500" /> Grammar Polish</h3>
+          <h3 id="grammar-polish" className="font-semibold mb-4 text-gray-900 dark:text-gray-100 flex items-center scroll-mt-28"><CheckCircle2 className="w-4 h-4 mr-2 text-green-500" /> Grammar Polish</h3>
           <div className="space-y-3">
             {feedback.grammarFixes.map((fix: any, i: number) => (
               <div key={i} className="p-3 rounded-lg bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">

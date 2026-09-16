@@ -3,7 +3,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useTheme } from "next-themes"
-import { PenSquare, Calendar, BarChart2, Settings, BookHeart, Sun, Moon, ChevronLeft, ChevronRight, Target, GitMerge, BatteryCharging, MessageCircle } from "lucide-react"
+import { PenSquare, Calendar, BarChart2, Settings, BookHeart, Sun, Moon, ChevronLeft, ChevronRight, Target, GitMerge, BatteryCharging, MessageCircle, Crosshair } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function Sidebar() {
@@ -14,6 +14,17 @@ export function Sidebar() {
   React.useEffect(() => {
     setMounted(true)
   }, [])
+
+  // The Focus Reset only exists in the navigation while the entries carry a stimulation signal or a plan is running.
+  const [focusActive, setFocusActive] = React.useState(false)
+  React.useEffect(() => {
+    let cancelled = false
+    fetch(`/api/focus/overview?tz_offset=${-new Date().getTimezoneOffset()}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => { if (!cancelled) setFocusActive(!!data?.active) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [pathname])
 
   const navSections = [
     {
@@ -29,6 +40,7 @@ export function Sidebar() {
         { name: "Insights", href: "/insights", icon: BarChart2 },
         { name: "Energy", href: "/energy", icon: BatteryCharging },
         { name: "Chat", href: "/chat", icon: MessageCircle },
+        ...(focusActive ? [{ name: "Focus", href: "/focus", icon: Crosshair }] : []),
       ],
     },
     {

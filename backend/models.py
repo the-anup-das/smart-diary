@@ -61,6 +61,9 @@ class FeedbackReport(Base):
 
     # Find Your Energy
     energy_data = Column(JSON, nullable=True)
+
+    # Focus Reset: reward-seeking / overstimulation signals extracted from the entry
+    stimulation_data = Column(JSON, nullable=True)
     
     # Token Usage
     prompt_tokens = Column(Integer, default=0)
@@ -156,3 +159,47 @@ class CalmSession(Base):
     completed_at = Column(DateTime, nullable=True)
 
     user = relationship("User")
+
+class FocusPlan(Base):
+    """A Focus Reset programme (see routers/focus.py): one behaviour, one abstinence window, self-binding rules."""
+    __tablename__ = "focus_plans"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    behaviour = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    objectives = Column(Text, nullable=True)     # what the behaviour does for the person
+    problems = Column(Text, nullable=True)       # what it costs them
+    abstinence_days = Column(Integer, default=7)
+    start_date = Column(String, nullable=False)  # YYYY-MM-DD in the person's local time
+    status = Column(String, default="active")    # active | completed | abandoned
+    rules = Column(JSON, nullable=True)          # self-binding rules, list of strings
+    replacements = Column(JSON, nullable=True)   # replacement activities, list of strings
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+
+class FocusUrge(Base):
+    """One logged urge, surfed or acted on."""
+    __tablename__ = "focus_urges"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id = Column(String, ForeignKey("focus_plans.id", ondelete="SET NULL"), nullable=True)
+    logged_at = Column(DateTime, default=datetime.utcnow, index=True)
+    intensity = Column(Integer, nullable=True)   # 1..5
+    acted = Column(Boolean, default=False)
+    trigger = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+
+class FocusCheckin(Base):
+    """Daily check-in during a plan: urges felt, whether the person gave in, sleep."""
+    __tablename__ = "focus_checkins"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id = Column(String, ForeignKey("focus_plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(String, nullable=False)        # YYYY-MM-DD local
+    urges = Column(Integer, default=0)
+    gave_in = Column(Boolean, default=False)
+    sleep_ok = Column(Boolean, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
