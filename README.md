@@ -2,7 +2,7 @@
 
 # 📔 Notebook — AI-Powered Personal Diary
 
-**A private, self-hosted journaling app with Multi-Agent Swarm reasoning and Long-Term Memory.**
+**A private, self-hosted AI journal: a diary app with mood tracking, AI reflections, overthinking and digital-wellbeing help, multi-agent decision support and long-term memory. Runs on Docker with OpenAI or fully local models (Ollama, LM Studio).**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
@@ -10,11 +10,26 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docker.com)
 
-[Problem & Solution](#-what-problem-we-solve) · [Architecture](#%EF%B8%8F-system-architecture) · [Decision Swarm](#-decision-swarm-architecture) · [3-Minute Reset](#-3-minute-reset-overthinking-antidote) · [Getting Started](#-getting-started)
+[Who It Is For](#-who-this-is-for) · [Architecture](#%EF%B8%8F-system-architecture) · [Decision Swarm](#-decision-swarm-architecture) · [3-Minute Reset](#-3-minute-reset-overthinking-antidote) · [Tech Stack](#-tech-stack) · [Getting Started](#-getting-started)
 
 </div>
 
 ---
+
+## 🔍 Who This Is For
+
+Notebook is for people searching for any of these, and finding that the usual apps upload their most private writing to someone else's cloud:
+
+- a **self-hosted journaling app** or **private AI diary** you run at home, on a NAS or a Raspberry Pi, as an alternative to Day One, Journey or Reflectly
+- a **mood tracker and mental health journal** with a mood calendar, sentiment and emotion tracking, and a wellbeing profile over time
+- **CBT journaling**: cognitive reframes, thought records, a Stoic circle of control, open-loop tracking
+- **help with overthinking and rumination**: detection in your own writing plus a guided three-minute practice
+- a **dopamine detox** or **digital wellbeing** tool for doomscrolling, late-night screens, gaming and other compulsive habits, with a guided reset programme and urge surfing
+- a **habit tracker with streaks** for writing, calm practice and abstinence windows
+- **voice journaling** with a self-hosted Whisper speech-to-text server
+- **chat with your journal** (RAG over your own entries) and a multi-agent **decision-making assistant**
+- an **Obsidian-style writing experience** with markdown shortcuts, Tab word completion, typewriter scrolling and focus mode
+- **privacy-first AI**: bring your own key, or point it at a local LLM so nothing ever leaves your network
 
 ## 🎯 What Problem We Solve
 *Journaling is powerful, but extracting long-term insights is tedious.* 
@@ -86,6 +101,7 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 
 **Write**
 - **Daily journal** with rich text (Tiptap), autosave, and a distraction-free **Focus Mode**.
+- **Writing experience:** Tab word completion from your own vocabulary, typewriter scrolling, readable line width, smart typography, task lists, and a goal-aware word count with your writing streak. Prompts step aside once you are writing.
 - **Voice journaling:** continuous dictation via a self-hosted Whisper (faster-whisper) container — audio never leaves your server.
 - **Guided templates:** Three Good Things, CBT Thought Record, Stoic Evening Review, Morning Pages, Five-Minute Journal, Worry Dump, Self-Compassion Break.
 - **Backfill missed days:** click any empty past day in History to write that day's entry.
@@ -97,7 +113,8 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 - **On This Day + mood heatmap:** date-based memory resurfacing and a year-at-a-glance mood calendar.
 - **Find Your Energy:** mental battery, Stoic Circle of Control reframing, rumination coaching, micro-actions.
 - **3-Minute Reset:** detects overthinking in your entries and guides a three-minute breathing, stillness and visualisation practice, personalised to the loop you are stuck in and tracked like a habit.
-- **Wellbeing Profile and patterns:** a six-axis radar of mood, energy, calm, agency, outward focus and clarity, plus a 28-day mood heatmap, weekly rhythm and overthinking trend on Insights.
+- **Wellbeing Profile and patterns:** a six-axis radar of mood, energy, calm, agency, outward focus and clarity, each with a plain-language guide, plus a 28-day mood heatmap, weekly rhythm and overthinking trend on Insights.
+- **Focus Reset (digital wellbeing):** appears only when your entries mention compulsive, high-stimulation habits. A guided programme after Lembke's DOPAMINE structure and Sepah's dopamine fasting: one behaviour, a 7, 14 or 30-day window, self-binding rules, replacements, daily check-ins, and a ninety-second urge-surfing practice.
 
 **Ask**
 - **Chat with your journal (RAG):** streaming answers grounded in your own entries with clickable date citations; conversations are saved and resumable.
@@ -166,6 +183,16 @@ We take the reliability and cost of AI seriously:
 - **Transparency Dashboard:** Track your exact token usage and estimated analysis costs directly in the Settings menu.
 
 ---
+
+## 🧰 Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 16 (App Router, standalone output), React 19, TypeScript, Tailwind CSS v4, TipTap 3 on ProseMirror for the editor, SWR for data fetching, next-pwa for the installable offline app, Framer Motion, Lucide icons, next-themes |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2, Alembic migrations, Pydantic v2 structured outputs, PostgreSQL 15, uv for dependency management |
+| AI | OpenAI SDK against any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio, LM Link), LangGraph and LangChain for the multi-agent decision swarm, mem0 with Qdrant for long-term vector memory, faster-whisper server for speech-to-text |
+| Quality | pytest (offline, SQLite-backed API tests), DeepEval for AI faithfulness and relevancy, GitHub Actions publishing multi-arch images to GHCR |
+| Deployment | Docker Compose, x86 and ARM64 images, OpenMediaVault, Synology and QNAP configs, JWT auth with rate limiting |
 
 ## 📐 Design Decisions
 - **LangGraph for Orchestration:** Allows for complex state-management and parallel "swarm" reasoning that simple prompt chains cannot achieve.
@@ -251,9 +278,18 @@ Notebook provides a built-in JSON archive system located in **Settings > Data & 
 ---
 
 ## 📁 Project Structure
-- `backend/skills/decision_agent.py`: The LangGraph Swarm engine.
-- `backend/services/memory_service.py`: Mem0 and Qdrant integration.
-- `frontend/src/app/(dashboard)/decisions/[id]/page.tsx`: Unified Dynamic Swarm UI.
+- `backend/routers/analyze.py`: the Save & Reflect analysis, energy dashboard endpoints and the stimulation signal extraction.
+- `backend/routers/insights.py` and `backend/wellbeing.py`: Insights aggregation, the Wellbeing Profile axes, 28-day patterns.
+- `backend/routers/calm.py` and `backend/skills/three_minute_reset/`: the 3-Minute Reset sessions and its planner prompt.
+- `backend/routers/focus.py`: the Focus Reset overview, plans, urges and check-ins.
+- `backend/skills/decision_agent.py`: the LangGraph Swarm engine.
+- `backend/memory_service.py`: Mem0 and Qdrant integration.
+- `backend/alembic/versions/`: schema migrations, applied automatically at startup.
+- `backend/tests/`: offline API tests (`cd backend && python -m pytest tests -q`).
+- `frontend/src/components/diary/`: the editor, feedback view, templates, voice recorder and the Tab word-completion extension.
+- `frontend/src/components/calm/`, `frontend/src/components/focus/`: the reset overlay, practice card, urge surfing and Focus pages.
+- `frontend/src/components/insights/`: charts, the Wellbeing radar, heatmap, weekly rhythm and trend cards.
+- `frontend/src/app/(dashboard)/decisions/[id]/page.tsx`: unified Dynamic Swarm UI.
 
 ---
 
@@ -261,6 +297,10 @@ Notebook provides a built-in JSON archive system located in **Settings > Data & 
 Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
+
+## 🏷️ Keywords
+
+self-hosted journal, AI diary, private journaling app, mood tracker, mental health journal, CBT journaling, cognitive reframing, overthinking, rumination, mindfulness, dopamine detox, digital wellbeing, screen time, habit tracker, streaks, voice journaling, Whisper, chat with your notes, RAG, LangGraph, mem0, Qdrant, Next.js, FastAPI, PostgreSQL, Docker, NAS, Raspberry Pi, Ollama, local LLM, privacy-first AI, Day One alternative, Obsidian alternative for journaling.
 
 ## 📄 License
 MIT License. See [LICENSE](./LICENSE) for details.
