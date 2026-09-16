@@ -1,10 +1,14 @@
 "use client"
 import * as React from "react"
 import { Brain, Check, ChevronDown, ChevronUp, BookOpen, Square, Sparkles } from "lucide-react"
-import { BUILDERS, MIND_GUIDE_WEEKS, BRAIN_ROT_NOTES, GUIDE_DAYS, localToday, tzOffset, type MindSummary } from "@/lib/focus"
+import { BUILDERS, MIND_GUIDE_WEEKS, BRAIN_ROT_NOTES, GUIDE_DAYS, localToday, tzOffset, type MindSummary, type WeekBlock } from "@/lib/focus"
 
 const ROT_COLOUR = ["transparent", "#c4b5fd", "#8b5cf6", "#5b21b6"]
 const JSON_HEADERS = { "Content-Type": "application/json" }
+const dayWord = (n: number) => (n === 1 ? "day" : "days")
+const atNoon = (iso: string) => new Date(`${iso}T12:00:00`)
+const weekday = (iso: string) => atNoon(iso).toLocaleDateString("en-US", { weekday: "short" })
+const monthDay = (iso: string) => atNoon(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" })
 
 function Card({ children, className = "", id }: { children: React.ReactNode; className?: string; id?: string }) {
   return <div id={id} className={`p-5 lg:p-7 rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-lg ${className}`}>{children}</div>
@@ -20,6 +24,55 @@ function Stat({ label, value, sub }: { label: string; value: string; sub: string
   )
 }
 
+/** Four seven-day blocks: fog days in violet, builder days in green. */
+function WeekRow({ weeks, label, current }: { weeks: WeekBlock[]; label: string; current?: number }) {
+  if (!weeks.length) return null
+  return (
+    <div className="mt-4">
+      <p className="text-[10px] uppercase tracking-widest text-gray-400 mb-1.5">{label}</p>
+      <div className="grid grid-cols-4 gap-2">
+        {weeks.map(w => (
+          <div key={w.week}
+            title={`Week ${w.week}: ${w.analysedDays} of ${w.days} days reflected, fog on ${w.fogDays}, a builder on ${w.builderDays}${w.minutes ? `, ${w.minutes} min passive` : ""}`}
+            className={`p-2 rounded-lg text-center ${current === w.week ? "bg-violet-500/10 border border-violet-500/30" : "bg-black/[0.03] dark:bg-white/5"}`}>
+            <p className="text-[10px] text-gray-400">Week {w.week}{w.days < 7 ? ` · ${w.days}d` : ""}</p>
+            <div className="flex items-end justify-center gap-1 h-8 mt-1" aria-hidden="true">
+              <span className="w-3 rounded-t bg-violet-500" style={{ height: `${Math.max(4, (w.fogDays / 7) * 100)}%`, opacity: w.fogDays ? 1 : 0.15 }} />
+              <span className="w-3 rounded-t bg-emerald-400" style={{ height: `${Math.max(4, (w.builderDays / 7) * 100)}%`, opacity: w.builderDays ? 1 : 0.15 }} />
+            </div>
+            <p className="text-[11px] mt-1 whitespace-nowrap">
+              <span className="font-semibold text-violet-600 dark:text-violet-400">{w.fogDays}</span> fog · <span className="font-semibold text-emerald-600 dark:text-emerald-400">{w.builderDays}</span> built
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function GuideComparison({ weeks }: { weeks: WeekBlock[] }) {
+  const first = weeks[0]
+  const last = weeks[weeks.length - 1]
+  if (!first || !last || first === last) return null
+  const thin = first.analysedDays === 0 || last.analysedDays === 0
+  const verdict = thin
+    ? "One of those weeks has no reflected entries, so the comparison is thin."
+    : last.fogDays < first.fogDays
+      ? "Fewer fog days. That is the number to keep an eye on."
+      : last.fogDays > first.fogDays
+        ? "More fog days than at the start. Worth reading both weeks' entries side by side."
+        : "The same number of fog days. The builders and the minutes tell the rest of the story."
+  return (
+    <>
+      <p className="text-gray-600 dark:text-gray-300 mt-1">
+        Week one: fog on {first.fogDays} of {first.analysedDays} reflected {dayWord(first.analysedDays)}, a builder on {first.builderDays}.
+        {" "}Week {last.week}: fog on {last.fogDays} of {last.analysedDays}, a builder on {last.builderDays}. {verdict}
+      </p>
+      <WeekRow weeks={weeks} label="The four weeks" />
+    </>
+  )
+}
+
 /**
  * Mind fitness: what the entries say about fog, attention and passive consumption, the ten
  * activities that build a sharper mind, and a four-week guide. Rendered by the Focus page only
@@ -27,7 +80,9 @@ function Stat({ label, value, sub }: { label: string; value: string; sub: string
  */
 export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: () => void }) {
   const today = localToday()
-  const todayDay = mind.days.find(d => d.date === today)
+  const [selected, setSelected] = React.useState(today)
+  const lastSeven = mind.days.slice(-7)
+  const selectedDay = mind.days.find(d => d.date === selected) ?? mind.days[mind.days.length - 1]
   const [busy, setBusy] = React.useState<string | null>(null)
   const [showNotes, setShowNotes] = React.useState(false)
   const [showWhy, setShowWhy] = React.useState(false)
@@ -35,13 +90,12 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
   const [guideBusy, setGuideBusy] = React.useState(false)
   const guide = mind.guide
   const currentWeek = guide && !guide.finished ? MIND_GUIDE_WEEKS[Math.min(4, Math.max(1, guide.week)) - 1] : null
-  const dayWord = (n: number) => (n === 1 ? "day" : "days")
 
   const toggleBuilder = async (key: string) => {
-    if (busy) return
-    const done = !todayDay?.manual.includes(key)
+    if (busy || !selectedDay) return
+    const done = !selectedDay.builders.includes(key)
     setBusy(key)
-    await fetch(`/api/focus/mind/builders?tz_offset=${tzOffset()}`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ date: today, builder: key, done }) }).catch(() => {})
+    await fetch(`/api/focus/mind/builders?tz_offset=${tzOffset()}`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ date: selectedDay.date, builder: key, done }) }).catch(() => {})
     setBusy(null)
     onChanged()
   }
@@ -51,6 +105,11 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
     setGuideBusy(false)
     onChanged()
   }
+
+  const selectedLabel = selectedDay ? (selectedDay.date === today ? "Today" : monthDay(selectedDay.date)) : ""
+  const selectedSource = !selectedDay ? "" : selectedDay.fromEntry.length
+    ? `${selectedDay.fromEntry.length} read from the entry`
+    : selectedDay.analysed ? "the entry mentioned none" : "no reflected entry that day"
 
   return (
     <>
@@ -82,6 +141,8 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
           <Stat label="Builder days" value={`${mind.weekBuilderDays}`} sub="of the last 7" />
         </div>
 
+        <WeekRow weeks={mind.weeks} label="By week, oldest first" />
+
         {mind.notes.length > 0 && (
           <p className="text-sm text-gray-600 dark:text-gray-300 mt-4">
             In your words: <span className="italic">{mind.notes.slice(-3).join("; ")}</span>.
@@ -101,26 +162,45 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
       <Card>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="font-semibold">Today&apos;s builders</h3>
-            <p className="text-xs text-gray-500 mt-1">Ten things that build a sharper mind. Entries count on their own; tick the rest.</p>
+            <h3 className="font-semibold">Builders</h3>
+            <p className="text-xs text-gray-500 mt-1">Ten things that build a sharper mind. Entries count on their own; tick the rest, for today or a day you forgot.</p>
           </div>
           <div className="text-right flex-shrink-0">
             <p className="text-2xl font-bold text-violet-600 dark:text-violet-400">{mind.weekScore}%</p>
             <p className="text-[10px] uppercase tracking-widest text-gray-400">of this week&apos;s targets</p>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-4">
-          {BUILDERS.map(b => {
-            const done = !!todayDay?.builders.includes(b.key)
-            const fromEntry = done && !todayDay?.manual.includes(b.key)
+
+        <div className="flex gap-1.5 mt-4" role="tablist" aria-label="Pick a day">
+          {lastSeven.map(d => {
+            const active = d.date === selectedDay?.date
             return (
-              <button key={b.key} onClick={() => !fromEntry && toggleBuilder(b.key)} disabled={fromEntry || busy === b.key} aria-pressed={done}
-                title={fromEntry ? "Counted from today's entry" : b.example}
+              <button key={d.date} role="tab" aria-selected={active} onClick={() => setSelected(d.date)}
+                className={`flex-1 min-w-0 py-1.5 rounded-xl border text-center cursor-pointer transition-colors ${active ? "bg-violet-600 border-violet-600 text-white" : "border-black/10 dark:border-white/15 hover:border-violet-500/50"}`}>
+                <span className="block text-[10px] uppercase tracking-wider opacity-80 truncate">{d.date === today ? "Today" : weekday(d.date)}</span>
+                <span className="block text-sm font-semibold leading-tight">{atNoon(d.date).getDate()}</span>
+                <span className={`block mx-auto mt-1 w-1.5 h-1.5 rounded-full ${d.builders.length ? (active ? "bg-white" : "bg-emerald-400") : "bg-transparent"}`} />
+              </button>
+            )
+          })}
+        </div>
+        {selectedDay && (
+          <p className="text-xs text-gray-500 mt-3">
+            {selectedLabel}: {selectedDay.builders.length ? `${selectedDay.builders.length} of ten` : "nothing yet"}, {selectedSource}. Untick anything the entry got wrong.
+          </p>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3">
+          {BUILDERS.map(b => {
+            const done = !!selectedDay?.builders.includes(b.key)
+            const fromEntry = done && !!selectedDay?.fromEntry.includes(b.key) && !selectedDay?.manual.includes(b.key)
+            return (
+              <button key={b.key} onClick={() => toggleBuilder(b.key)} disabled={busy === b.key || !selectedDay} aria-pressed={done} title={b.example}
                 className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-sm text-left cursor-pointer transition-colors disabled:cursor-default ${done ? "bg-violet-600 border-violet-600 text-white" : "border-black/10 dark:border-white/15 hover:border-violet-500/50"}`}>
                 {done ? <Check className="w-4 h-4 flex-shrink-0" /> : <Square className="w-4 h-4 flex-shrink-0 opacity-40" />}
                 <span className="min-w-0">
                   <span className="block leading-tight">{b.label}</span>
-                  {fromEntry && <span className="block text-[10px] opacity-75">from today&apos;s entry</span>}
+                  {fromEntry && <span className="block text-[10px] opacity-75">from the entry</span>}
                 </span>
               </button>
             )
@@ -187,13 +267,13 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
         {guide?.finished && (
           <div className="mt-4 p-4 rounded-xl bg-violet-500/10 border border-violet-500/20 text-sm">
             <p className="font-medium flex items-center gap-2"><Check className="w-4 h-4 text-violet-600" /> You ran the four weeks.</p>
-            <p className="text-gray-600 dark:text-gray-300 mt-1">
-              Fog or focus trouble showed up on {mind.fogDays} of the last 28 {dayWord(mind.fogDays)}. Read the entries from the first week next to this week&apos;s, keep the builders that moved the needle, and write the rules down while they are fresh.
-            </p>
+            <GuideComparison weeks={guide.weeks} />
+            <p className="text-gray-600 dark:text-gray-300 mt-2">Read the entries from the first week next to the last, keep the builders that moved the needle, and write the rules down while they are fresh.</p>
           </div>
         )}
 
-        {currentWeek && <WeekBlock week={currentWeek} current />}
+        {currentWeek && <WeekBlockView week={currentWeek} current />}
+        {guide && !guide.finished && guide.weeks.length > 1 && <WeekRow weeks={guide.weeks} label="The guide so far" current={guide.week} />}
 
         <div className="mt-4 divide-y divide-black/5 dark:divide-white/5 border-t border-black/5 dark:border-white/5">
           {MIND_GUIDE_WEEKS.filter(w => w.week !== currentWeek?.week).map(w => (
@@ -203,7 +283,7 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
                 <span><span className="text-gray-400 font-mono text-xs mr-2">Week {w.week}</span><span className="font-medium">{w.title}</span> <span className="text-gray-500">· {w.theme}</span></span>
                 {openWeek === w.week ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
               </button>
-              {openWeek === w.week && <div className="pb-4"><WeekBlock week={w} /></div>}
+              {openWeek === w.week && <div className="pb-4"><WeekBlockView week={w} /></div>}
             </div>
           ))}
         </div>
@@ -216,7 +296,7 @@ export function MindPanel({ mind, onChanged }: { mind: MindSummary; onChanged: (
   )
 }
 
-function WeekBlock({ week, current = false }: { week: (typeof MIND_GUIDE_WEEKS)[number]; current?: boolean }) {
+function WeekBlockView({ week, current = false }: { week: (typeof MIND_GUIDE_WEEKS)[number]; current?: boolean }) {
   return (
     <div className={current ? "mt-4 p-4 rounded-xl bg-violet-500/5 border border-violet-500/20" : ""}>
       {current && <p className="text-xs uppercase tracking-widest text-violet-600 dark:text-violet-400">This week · {week.title}</p>}

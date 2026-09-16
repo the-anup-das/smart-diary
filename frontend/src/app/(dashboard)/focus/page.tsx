@@ -40,6 +40,7 @@ export default function FocusPage() {
   const plan = data?.plan ?? null
   const hasSignal = !!data && data.recentSignalDays > 0
   const mindActive = !!data?.mind?.active
+  const hidden = !!data?.hidden
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-20 pt-6 fade-in">
@@ -60,9 +61,20 @@ export default function FocusPage() {
         </div>
       )}
 
+      {hidden && (
+        <Card>
+          <h2 className="text-lg font-semibold">Switched off in Settings</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Focus Reset and Mind Fitness are hidden by your preferences: nothing in the navigation, on Insights or after analysis.
+            Your entries are still analysed, so everything is here when you{" "}
+            <Link href="/settings" className="text-teal-700 dark:text-teal-300 hover:underline">turn them back on</Link>.
+          </p>
+        </Card>
+      )}
+
       {data && <SignalPanel data={data} />}
 
-      {!hasSignal && !plan && !mindActive && (
+      {!hasSignal && !plan && !mindActive && !hidden && (
         <Card>
           <h2 className="text-lg font-semibold">Nothing to work on right now</h2>
           <p className="text-sm text-gray-500 mt-1">
@@ -74,7 +86,7 @@ export default function FocusPage() {
         </Card>
       )}
 
-      {plan ? (
+      {hidden ? null : plan ? (
         <ActivePlan plan={plan} onSurf={() => setSurfOpen(true)} onReset={() => setResetOpen(true)} onChanged={reload} onQuickLog={logUrge} />
       ) : hasSignal && data ? (
         <PlanWizard data={data} onCreated={reload} onTrySurf={() => setSurfOpen(true)} />

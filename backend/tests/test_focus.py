@@ -228,3 +228,58 @@ def test_guide_start_and_stop(client, db_session):
     assert client.post("/api/focus/mind/guide", json={"action": "stop"}).json()["guide"] is None
     assert client.get("/api/focus/overview").json()["mind"]["guide"] is None
     assert client.post("/api/focus/mind/guide", json={"action": "pause"}).status_code == 422
+
+
+def test_entry_builders_can_be_excluded_and_restored(client, db_session):
+    _entry_cog(db_session, 0, _clear(builders=("exercise",)))
+    today = datetime.utcnow().date().isoformat()
+    day = client.get("/api/focus/overview").json()["mind"]["days"][-1]
+    assert day["fromEntry"] == ["exercise"] and day["builders"] == ["exercise"] and day["excluded"] == []
+    res = client.post("/api/focus/mind/builders", json={"date": today, "builder": "exercise", "done": False}).json()
+    assert res["fromEntry"] is True
+    mind = client.get("/api/focus/overview").json()["mind"]
+    assert mind["days"][-1]["builders"] == [] and mind["days"][-1]["excluded"] == ["exercise"]
+    assert mind["builders"]["exercise"]["weekDays"] == 0 and mind["weekBuilderDays"] == 0
+    client.post("/api/focus/mind/builders", json={"date": today, "builder": "exercise", "done": True})
+    day = client.get("/api/focus/overview").json()["mind"]["days"][-1]
+    assert day["builders"] == ["exercise"] and day["excluded"] == [] and day["manual"] == []
+    assert db_session.query(models.MindLog).count() == 0
+
+
+def test_builder_backfill_for_a_past_day(client, db_session):
+    yesterday = (datetime.utcnow().date() - timedelta(days=1)).isoformat()
+    client.post("/api/focus/mind/builders", json={"date": yesterday, "builder": "nature"})
+    mind = client.get("/api/focus/overview").json()["mind"]
+    assert mind["days"][-2]["date"] == yesterday and mind["days"][-2]["builders"] == ["nature"]
+    assert mind["builders"]["nature"]["weekDays"] == 1
+    too_old = (datetime.utcnow().date() - timedelta(days=28)).isoformat()
+    assert client.post("/api/focus/mind/builders", json={"date": too_old, "builder": "nature"}).status_code == 422
+
+
+def test_week_blocks_and_guide_weeks(client, db_session):
+    for days_ago in (0, 1, 2):
+        _entry_cog(db_session, days_ago, _fog())
+    _entry_cog(db_session, 8, _clear(builders=("exercise",)))
+    _entry_cog(db_session, 22, _fog())
+    weeks = client.get("/api/focus/overview").json()["mind"]["weeks"]
+    assert [w["week"] for w in weeks] == [1, 2, 3, 4] and all(w["days"] == 7 for w in weeks)
+    assert weeks[3]["fogDays"] == 3 and weeks[2]["builderDays"] == 1 and weeks[0]["fogDays"] == 1 and weeks[1]["analysedDays"] == 0
+    # a guide that started 21 days ago is in week 4; its last block holds today alone
+    user = db_session.get(models.User, TEST_USER)
+    user.preferences = {"mind_guide": {"startDate": (datetime.utcnow().date() - timedelta(days=21)).isoformat()}}
+    db_session.commit()
+    guide = client.get("/api/focus/overview").json()["mind"]["guide"]
+    assert guide["week"] == 4 and len(guide["weeks"]) == 4 and guide["weeks"][3]["days"] == 1
+    assert guide["weeks"][3]["fogDays"] == 1 and guide["weeks"][0]["fogDays"] == 0 and guide["weeks"][1]["builderDays"] == 1
+
+
+def test_hide_focus_preference_switches_everything_off(client, db_session):
+    _entry_cog(db_session, 0, _fog())
+    _entry_cog(db_session, 1, _fog())
+    assert client.get("/api/focus/overview").json()["active"] is True
+    user = db_session.get(models.User, TEST_USER)
+    user.preferences = {"hide_focus": True}
+    db_session.commit()
+    data = client.get("/api/focus/overview").json()
+    assert data["hidden"] is True and data["active"] is False and data["mind"]["active"] is False
+    assert data["mind"]["fogDays"] == 2  # still computed, for when it is switched back on

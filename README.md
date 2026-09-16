@@ -181,9 +181,10 @@ Overthinking is detected in two layers and answered with a guided practice based
 
 - **Detection:** Save & Reflect records brain fog and attention complaints in your own words, minutes of passive scrolling when you state them, whether short-form video came up, and which brain-building activities actually happened. Nothing is inferred or diagnosed.
 - **Nothing shown without a signal:** no card, no nav item and no feedback card until the last two weeks carry fog or short-form days, or you start the guide.
-- **Ten builders, weekly targets:** slept enough, read long-form, deep work block, moved hard, real rest, time outdoors, learned something hard, real conversation, made something, played. Entries count on their own; tick the rest. A weekly score shows how much of the target set you hit.
+- **Ten builders, weekly targets:** slept enough, read long-form, deep work block, moved hard, real rest, time outdoors, learned something hard, real conversation, made something, played. Entries count on their own; tick the rest for today or any of the last seven days, and untick anything the entry got wrong. A weekly score shows how much of the target set you hit, and a by-week row shows fog days against builder days across the month.
 - **Four-week guide:** one theme a week with four practices and a journal prompt each. Week one notices and subtracts (autoplay off, phone out of the bedroom, one boring wait a day), week two rebuilds attention (twenty minutes of a paper book, one deep-work block, green walks, seven hours in bed), week three feeds the brain (hard exercise, effortful learning, live conversation, making instead of consuming), week four makes it stick (compare week one's entries with now, a consumption budget, rules written down).
-- **Together with the Focus Reset:** when the entries carry both compulsive habits and fog, the stimulation programme and the mind panel sit on the same page, and the Insights card carries both lines.
+- **Together with the Focus Reset:** when the entries carry both compulsive habits and fog, the stimulation programme and the mind panel sit on the same page, and the Insights card carries both lines. At the end of the guide, week one is compared with week four in fog days and builder days.
+- **Yours to switch off and to back up:** one toggle in Settings hides Focus Reset and Mind Fitness everywhere, and the JSON export carries the stimulation and cognition signals, focus plans with their check-ins and urges, builder ticks and preferences, so an import restores them.
 
 <table>
   <tr>

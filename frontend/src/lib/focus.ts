@@ -41,8 +41,21 @@ export interface MindDay {
   fog: boolean
   shortForm: boolean
   minutes: number
-  builders: string[]
+  builders: string[]   // effective: from the entry plus manual ticks, minus exclusions
+  fromEntry: string[]
   manual: string[]
+  excluded: string[]
+}
+
+/** A seven-day block of the fog and builder trend, oldest first. */
+export interface WeekBlock {
+  week: number
+  days: number
+  analysedDays: number
+  fogDays: number
+  shortFormDays: number
+  builderDays: number
+  minutes: number
 }
 
 export interface MindGuide {
@@ -50,6 +63,7 @@ export interface MindGuide {
   day: number
   week: number
   finished: boolean
+  weeks: WeekBlock[]
 }
 
 export interface MindSummary {
@@ -66,6 +80,7 @@ export interface MindSummary {
   weekScore: number
   weekBuilderDays: number
   days: MindDay[]
+  weeks: WeekBlock[]
   guide: MindGuide | null
 }
 
@@ -94,6 +109,7 @@ export interface FocusPlan {
 export interface FocusOverview {
   success: boolean
   active: boolean
+  hidden: boolean   // the person switched the feature off in Settings
   windowDays: number
   days: SignalDay[]
   analysedDays: number
