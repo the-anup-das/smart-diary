@@ -2,6 +2,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { MessageCircle, Send, Sparkles, CalendarDays, Plus, History, Trash2, ThumbsUp, ThumbsDown } from "lucide-react"
+import { renderMarkdown } from "@/lib/markdown"
 
 interface Source {
   id: string
@@ -275,13 +276,13 @@ export default function ChatPage() {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                 m.role === "user"
-                  ? "bg-primary text-white shadow-md"
+                  ? "whitespace-pre-wrap bg-primary text-white shadow-md"
                   : "bg-white/60 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 text-gray-800 dark:text-gray-200 shadow-sm"
               }`}
             >
-              {m.content}
+              {m.role === "assistant" ? renderMarkdown(m.content) : m.content}
               {m.role === "assistant" && m.sources && m.sources.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/10">
                   <span className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold flex items-center gap-1">
