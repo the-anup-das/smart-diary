@@ -144,3 +144,87 @@ def test_plan_progress_after_the_window(client, db_session):
 
 def builtins_range(n):
     return range(n)
+
+
+# ---------------------------------------------------------------- mind fitness
+
+def _fog(minutes=90, short=True, builders=(), rot=2, note="could not focus on the report"):
+    return {"fogOrAttention": True, "attentionNote": note, "passiveConsumptionMinutes": minutes, "shortFormVideo": short, "builders": list(builders), "brainRotLoad": rot}
+
+
+def _clear(builders=()):
+    return {"fogOrAttention": False, "attentionNote": "", "passiveConsumptionMinutes": 0, "shortFormVideo": False, "builders": list(builders), "brainRotLoad": 0}
+
+
+def _entry_cog(db, days_ago, cognition, user_id=TEST_USER):
+    entry = models.JournalEntry(user_id=user_id, content="<p>day</p>", date=datetime.utcnow() - timedelta(days=days_ago))
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    db.add(models.FeedbackReport(journal_entry_id=entry.id, mood_score=6, grammar_score=8, stimulation_data=NONE, cognition_data=cognition))
+    db.commit()
+
+
+def test_mind_inactive_without_signals_but_reports_builders(client, db_session):
+    _entry_cog(db_session, 0, _clear(builders=("exercise", "deep_reading")))
+    _entry_cog(db_session, 1, _clear())
+    data = client.get("/api/focus/overview").json()
+    mind = data["mind"]
+    assert data["active"] is False and mind["active"] is False
+    assert mind["fogDays"] == 0 and mind["shortFormDays"] == 0 and mind["avgMinutes"] is None
+    assert mind["builders"]["exercise"] == {"weekDays": 1, "monthDays": 1, "target": 3}
+    assert mind["weekScore"] == round((1 + 1) / sum(focus.WEEK_TARGETS.values()) * 100)
+    assert mind["days"][-1]["builders"] == ["deep_reading", "exercise"] and mind["guide"] is None
+
+
+def test_mind_active_on_fog_and_short_form(client, db_session):
+    _entry_cog(db_session, 0, _fog(minutes=120, rot=3, note="reread the same page three times"))
+    _entry_cog(db_session, 1, _fog(minutes=60, rot=2))
+    _entry_cog(db_session, 2, _clear(builders=("nature",)))
+    _entry_cog(db_session, 20, _fog())  # outside the recent window, still counted in the month
+    data = client.get("/api/focus/overview").json()
+    mind = data["mind"]
+    assert data["active"] is True and mind["active"] is True
+    assert mind["fogDays"] == 3 and mind["recentFogDays"] == 2 and mind["shortFormDays"] == 3
+    assert mind["rotDays"] == 3 and mind["heavyRotDays"] == 1
+    assert mind["avgMinutes"] == 90 and mind["totalMinutes"] == 270
+    assert mind["notes"][-1] == "reread the same page three times"
+    assert mind["days"][-1]["rot"] == 3 and mind["days"][-1]["fog"] is True
+
+
+def test_builder_toggle_merges_with_entries_and_validates(client, db_session):
+    _entry_cog(db_session, 0, _clear(builders=("exercise",)))
+    today = datetime.utcnow().date().isoformat()
+    assert client.post("/api/focus/mind/builders", json={"date": today, "builder": "juggling"}).status_code == 422
+    future = (datetime.utcnow().date() + timedelta(days=1)).isoformat()
+    assert client.post("/api/focus/mind/builders", json={"date": future, "builder": "sleep"}).status_code == 422
+
+    assert client.post("/api/focus/mind/builders", json={"date": today, "builder": "sleep"}).json()["done"] is True
+    client.post("/api/focus/mind/builders", json={"date": today, "builder": "sleep"})  # idempotent
+    mind = client.get("/api/focus/overview").json()["mind"]
+    assert mind["days"][-1]["builders"] == ["exercise", "sleep"] and mind["days"][-1]["manual"] == ["sleep"]
+    assert mind["builders"]["sleep"]["weekDays"] == 1 and db_session.query(models.MindLog).count() == 1
+
+    client.post("/api/focus/mind/builders", json={"date": today, "builder": "sleep", "done": False})
+    mind = client.get("/api/focus/overview").json()["mind"]
+    assert mind["days"][-1]["builders"] == ["exercise"] and db_session.query(models.MindLog).count() == 0
+
+
+def test_guide_start_and_stop(client, db_session):
+    data = client.post("/api/focus/mind/guide?tz_offset=330", json={"action": "start"}).json()
+    assert data["guide"]["day"] == 1 and data["guide"]["week"] == 1 and data["guide"]["finished"] is False
+    overview = client.get("/api/focus/overview?tz_offset=330").json()
+    assert overview["active"] is True and overview["mind"]["guide"]["startDate"] == data["guide"]["startDate"]
+
+    # a guide started 22 days ago is in week 4; 29 days ago is finished
+    user = db_session.get(models.User, TEST_USER)
+    user.preferences = {"mind_guide": {"startDate": (datetime.utcnow().date() - timedelta(days=21)).isoformat()}}
+    db_session.commit()
+    assert client.get("/api/focus/overview").json()["mind"]["guide"]["week"] == 4
+    user.preferences = {"mind_guide": {"startDate": (datetime.utcnow().date() - timedelta(days=28)).isoformat()}}
+    db_session.commit()
+    assert client.get("/api/focus/overview").json()["mind"]["guide"]["finished"] is True
+
+    assert client.post("/api/focus/mind/guide", json={"action": "stop"}).json()["guide"] is None
+    assert client.get("/api/focus/overview").json()["mind"]["guide"] is None
+    assert client.post("/api/focus/mind/guide", json={"action": "pause"}).status_code == 422

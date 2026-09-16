@@ -9,7 +9,8 @@ import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
 import { WellbeingRadar } from "@/components/insights/WellbeingRadar"
 import { profileFromFeedback, hasProfile } from "@/lib/wellbeing"
 import Link from "next/link"
-import { Crosshair } from "lucide-react"
+import { Crosshair, Brain } from "lucide-react"
+import { BUILDER_LABELS } from "@/lib/focus"
 
 export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrivalMood = null, onInsertTemplate, onAppendToEntry, onResetCompleted }: { feedback: any, preferences?: any, onClose?: () => void, arrivalMood?: number | null, onInsertTemplate?: (key: string) => void, onAppendToEntry?: (text: string) => void, onResetCompleted?: () => void }) {
   const router = useRouter()
@@ -154,6 +155,31 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
             </div>
             <Link href="/focus" className="flex items-center space-x-2 px-5 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-colors whitespace-nowrap flex-shrink-0">
               <span>Open Focus Reset</span>
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* Fog and passive consumption: only when this entry says so */}
+      {!preferences?.hide_focus && (feedback.cognition?.brainRotLoad ?? 0) >= 2 && (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-violet-500/10 to-indigo-500/10 border border-violet-500/30 backdrop-blur-xl shadow-lg">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center">
+                <Brain className="w-5 h-5 mr-2 text-violet-500" />
+                Fog in today's entry
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 max-w-lg">
+                {feedback.cognition.attentionNote ? `"${String(feedback.cognition.attentionNote).replace(/[.\s]+$/, "")}". ` : ""}
+                {feedback.cognition.shortFormVideo ? "Short-form video came up" : ""}
+                {feedback.cognition.passiveConsumptionMinutes ? `${feedback.cognition.shortFormVideo ? ", with" : "You mentioned"} about ${feedback.cognition.passiveConsumptionMinutes} minutes of passive scrolling` : ""}
+                {feedback.cognition.shortFormVideo || feedback.cognition.passiveConsumptionMinutes ? ". " : ""}
+                {feedback.cognition.builders?.length ? `On the other side of the ledger: ${feedback.cognition.builders.map((b: string) => (BUILDER_LABELS[b] || b).toLowerCase()).join(", ")}.` : ""}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">One foggy day is a day. If it keeps coming back, Mind fitness on the Focus page has a four-week guide.</p>
+            </div>
+            <Link href="/focus#mind" className="flex items-center space-x-2 px-5 py-2.5 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700 transition-colors whitespace-nowrap flex-shrink-0">
+              <span>Open Mind fitness</span>
             </Link>
           </div>
         </div>

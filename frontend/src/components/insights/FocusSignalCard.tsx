@@ -5,6 +5,7 @@ import { Crosshair, ArrowRight } from "lucide-react"
 import { fetchOverview, type FocusOverview } from "@/lib/focus"
 
 const LOAD_COLOUR = ["transparent", "#fbbf24", "#f97316", "#f43f5e"]
+const ROT_COLOUR = ["transparent", "#c4b5fd", "#8b5cf6", "#5b21b6"]
 
 /** Insights card for stimulation signals. Renders nothing at all unless the entries carry a signal or a plan is running. */
 export function FocusSignalCard() {
@@ -20,6 +21,10 @@ export function FocusSignalCard() {
   const tod = Object.entries(data.timeOfDay).sort((a, b) => b[1] - a[1])[0]?.[0]
   const after = Object.entries(data.afterStates).sort((a, b) => b[1] - a[1])[0]?.[0]
   const plan = data.plan
+  const mind = data.mind
+  const stimulation = data.signalDays > 0 || !!plan
+  const mindOnly = !stimulation && !!mind?.active
+  const dayWord = (n: number) => (n === 1 ? "day" : "days")
 
   return (
     <div className="p-5 lg:p-7 rounded-2xl bg-white/50 dark:bg-black/20 backdrop-blur-xl border border-black/5 dark:border-white/10 shadow-lg">
@@ -29,29 +34,37 @@ export function FocusSignalCard() {
             <Crosshair className="w-5 h-5 text-teal-500" />
             <span>Focus & Stimulation</span>
           </h3>
-          <p className="text-xs text-gray-500 mt-1">Reward-seeking habits your entries mention, over the last four weeks. Shown only while there is a signal.</p>
+          <p className="text-xs text-gray-500 mt-1">Reward-seeking habits, fog and passive consumption your entries mention, over the last four weeks. Shown only while there is a signal.</p>
         </div>
-        <Link href="/focus" className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0">
-          {plan ? `Day ${plan.dayNumber} of ${plan.abstinenceDays}` : "Open Focus Reset"} <ArrowRight className="w-4 h-4" />
+        <Link href={mindOnly ? "/focus#mind" : "/focus"} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0">
+          {plan ? `Day ${plan.dayNumber} of ${plan.abstinenceDays}` : mindOnly ? "Open Mind fitness" : "Open Focus Reset"} <ArrowRight className="w-4 h-4" />
         </Link>
       </div>
 
       <div className="grid grid-cols-14 gap-1.5 mt-5">
         {data.days.map(d => (
-          <div key={d.date} title={`${d.date}: ${d.analysed ? (d.load ? `load ${d.load}, ${d.behaviours.map(b => b.behaviour).join(", ")}` : "no signal") : "not reflected"}`}
+          <div key={d.date} title={`${d.date}: ${d.analysed ? (d.load ? `load ${d.load}, ${d.behaviours.map(b => b.behaviour).join(", ")}` : d.rot ? `fog level ${d.rot}` : "no signal") : "not reflected"}`}
             className={`aspect-square rounded-[3px] ${d.analysed ? "" : "border border-dashed border-black/10 dark:border-white/15"}`}
-            style={{ backgroundColor: d.load ? LOAD_COLOUR[Math.min(3, d.load)] : d.analysed ? "rgba(156,163,175,0.25)" : "transparent", opacity: 0.85 }} />
+            style={{ backgroundColor: d.load ? LOAD_COLOUR[Math.min(3, d.load)] : d.rot ? ROT_COLOUR[Math.min(3, d.rot)] : d.analysed ? "rgba(156,163,175,0.25)" : "transparent", opacity: 0.85 }} />
         ))}
       </div>
 
-      <p className="text-sm text-gray-600 dark:text-gray-300 mt-4">
+      {stimulation && <p className="text-sm text-gray-600 dark:text-gray-300 mt-4">
         Signals on {data.signalDays} of {data.analysedDays} reflected days
         {data.heavyDays ? `, ${data.heavyDays} heavy` : ""}
         {top.length ? `. Mostly ${top.map(b => `${b.label} (${b.count})`).join(", ")}` : ""}
         {tod && tod !== "unknown" ? `, usually in the ${tod}` : ""}
         {after ? `, followed by feeling ${after}` : ""}.
         {data.lostControlDays ? ` Lost track of time on ${data.lostControlDays}.` : ""}
-      </p>
+      </p>}
+      {mind?.active && (
+        <p className={`text-sm text-violet-700 dark:text-violet-300 ${stimulation ? "mt-2" : "mt-4"}`}>
+          Mind: fog or focus trouble on {mind.fogDays} {dayWord(mind.fogDays)}, short-form video on {mind.shortFormDays}
+          {mind.avgMinutes != null ? `, about ${mind.avgMinutes} minutes of passive scrolling on the days it was timed` : ""}.
+          {mind.weekBuilderDays ? ` Builders on ${mind.weekBuilderDays} of the last 7 days.` : ""}
+          {mind.guide ? mind.guide.finished ? " Four-week guide complete." : ` Guide day ${mind.guide.day} of 28.` : ""}
+        </p>
+      )}
       {plan && (
         <p className="text-sm text-teal-700 dark:text-teal-300 mt-2">
           Reset in progress for {plan.behaviour}: {plan.cleanStreak} clean {plan.cleanStreak === 1 ? "day" : "days"} in a row, {plan.urges.surfed} of {plan.urges.total} urges surfed.

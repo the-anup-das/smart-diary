@@ -69,6 +69,14 @@ class StimulationSignalsSchema(BaseModel):
     displaced: list[str] = Field(description="Things the writer says were skipped or delayed because of the behaviour. Empty if none.")
     load: int = Field(ge=0, le=3, description="Overall stimulation load in this entry: 0 none mentioned, 1 mild, 2 notable (lost time or guilt), 3 heavy (lost control, sleep or duties affected).")
 
+class CognitionSignalsSchema(BaseModel):
+    fogOrAttention: bool = Field(description="True when the writer describes trouble focusing, brain fog, forgetfulness, mental fatigue, rereading without taking it in, or not being able to finish what they started.")
+    attentionNote: str = Field(description="A short paraphrase of the attention or fog complaint, or an empty string.")
+    passiveConsumptionMinutes: int = Field(ge=0, le=1440, description="Minutes of passive feed or video consumption the entry states or clearly implies, e.g. 'two hours of reels' is 120. 0 when not mentioned. Never guess a number that is not there.")
+    shortFormVideo: bool = Field(description="True when short-form video is mentioned: reels, shorts, TikTok, endless clips.")
+    builders: list[Literal["deep_reading", "learning", "creating", "deep_work", "exercise", "nature", "conversation", "play", "rest", "sleep"]] = Field(description="Brain-building activities the entry says actually happened today: deep_reading (a book or long article), learning (a skill, course, language), creating (writing, music, making something), deep_work (a long uninterrupted block of focused work), exercise, nature (time outdoors), conversation (a real conversation with someone), play (sport, games or hobbies with people), rest (unplugged rest or deliberate boredom), sleep (a good night's sleep). Empty if none.")
+    brainRotLoad: int = Field(ge=0, le=3, description="0 nothing relevant; 1 passive consumption or fog mentioned; 2 both, or one of them with an intended deep activity displaced; 3 heavy: fog plus hours of passive consumption plus sleep, work or reading displaced.")
+
 class FeedbackReportSchema(BaseModel):
     moodScore: int = Field(ge=1, le=10, description="Score the emotional state from 1 (Despair) to 10 (Euphoric).")
     sentiment: str = Field(description="A single word describing the core sentiment (Stressed, Joyful, Neutral, Anxious, Focused, Calm, etc).")
@@ -86,6 +94,7 @@ class FeedbackReportSchema(BaseModel):
     distressFlag: bool = Field(description="True ONLY when the entry contains clear signals of self-harm, suicidal thoughts, or acute crisis (e.g. hopelessness about being alive, wanting to disappear or end things). Ordinary sadness, stress, anger, or venting must be False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
     stimulation: StimulationSignalsSchema = Field(description="Reward-seeking and overstimulation signals, only from what the entry explicitly says.")
+    cognition: CognitionSignalsSchema = Field(description="Attention, brain fog, passive consumption and brain-building activities, only from what the entry explicitly says.")
 
 
 def _tokenize(text: str) -> set[str]:
@@ -137,7 +146,11 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         "6. Stimulation: record compulsive or high-stimulation behaviours ONLY when the entry mentions them "
         "(scrolling, social media, video, gaming, porn, gambling, food, shopping, substances), with trigger, time of day, "
         "loss of control, the after-state, sleep impact and what was displaced. If nothing is mentioned, return an empty "
-        "list, afterState 'none' and load 0. Never diagnose; describe behaviour."
+        "list, afterState 'none' and load 0. Never diagnose; describe behaviour.\n"
+        "7. Mind: note attention trouble or brain fog the writer describes, minutes of passive feed or video consumption "
+        "only when stated, whether short-form video is mentioned, and brain-building activities that actually happened "
+        "(deep reading, learning, creating, deep work, exercise, nature, conversation, play, rest, sleep). brainRotLoad 0 "
+        "when nothing relevant is mentioned. Describe, never diagnose."
     )
     custom_persona = preferences.get("custom_persona_prompt", "")
     if custom_persona:
@@ -174,6 +187,7 @@ def _build_response(feedback, cached: bool = False):
             "moodScore": feedback.mood_score,
             "energyData": feedback.energy_data,
             "stimulation": feedback.stimulation_data,
+            "cognition": feedback.cognition_data,
             "sentiment": feedback.sentiment,
             "grammarScore": feedback.grammar_score,
             "grammarFixes": feedback.grammar_fixes,
@@ -324,6 +338,7 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "distress_flag": parsed.distressFlag,
             "energy_data": energy_data,
             "stimulation_data": parsed.stimulation.model_dump(),
+            "cognition_data": parsed.cognition.model_dump(),
             "prompt_tokens": usage["prompt_tokens"],
             "completion_tokens": usage["completion_tokens"],
             "total_tokens": usage["total_tokens"]

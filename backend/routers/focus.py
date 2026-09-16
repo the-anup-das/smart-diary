@@ -16,6 +16,7 @@ name is used only because it is what people search for.
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, timedelta, date as date_type
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
@@ -29,6 +30,13 @@ router = APIRouter(tags=["focus"])
 WINDOW_DAYS = 28
 RECENT_DAYS = 14
 ABSTINENCE_OPTIONS = (7, 14, 30)
+
+# Mind fitness: brain-building activities and how many days a week each is worth aiming for.
+WEEK_TARGETS = {
+    "deep_reading": 4, "deep_work": 3, "exercise": 3, "nature": 2, "learning": 2,
+    "conversation": 2, "creating": 1, "play": 1, "rest": 3, "sleep": 5,
+}
+GUIDE_DAYS = 28
 
 
 def _local_today(tz_offset: int) -> date_type:
@@ -68,6 +76,7 @@ def _signal_days(user_id: str, db: Session, tz_offset: int) -> list[dict]:
             continue
         d = (e.date + offset).date()
         s = fb.stimulation_data or {}
+        c = fb.cognition_data or {}
         by_day[d] = {
             "analysed": True,
             "load": int(s.get("load") or 0),
@@ -77,12 +86,19 @@ def _signal_days(user_id: str, db: Session, tz_offset: int) -> list[dict]:
             "sleepDisrupted": bool(s.get("sleepDisrupted")),
             "craving": bool(s.get("cravingLanguage")),
             "displaced": s.get("displaced") or [],
+            # mind fitness
+            "fog": bool(c.get("fogOrAttention")),
+            "fogNote": str(c.get("attentionNote") or ""),
+            "minutes": int(c.get("passiveConsumptionMinutes") or 0),
+            "shortForm": bool(c.get("shortFormVideo")),
+            "builders": [b for b in (c.get("builders") or []) if isinstance(b, str) and b in WEEK_TARGETS],
+            "rot": int(c.get("brainRotLoad") or 0),
         }
     days = []
     for i in builtins.range(WINDOW_DAYS - 1, -1, -1):
         d = today - timedelta(days=i)
         info = by_day.get(d)
-        days.append({"date": d.isoformat(), **(info or {"analysed": False, "load": 0, "behaviours": [], "afterState": "none", "lowMotivation": False, "sleepDisrupted": False, "craving": False, "displaced": []})})
+        days.append({"date": d.isoformat(), **(info or {"analysed": False, "load": 0, "behaviours": [], "afterState": "none", "lowMotivation": False, "sleepDisrupted": False, "craving": False, "displaced": [], "fog": False, "fogNote": "", "minutes": 0, "shortForm": False, "builders": [], "rot": 0})})
     return days
 
 
@@ -134,6 +150,146 @@ def _summarise(days: list[dict]) -> dict:
         "afterStates": after,
         "displaced": displaced[-8:],
     }
+
+
+# --------------------------------------------------------------------------
+# Mind fitness: attention, fog, passive consumption and brain builders
+# --------------------------------------------------------------------------
+
+def _manual_builders(user_id: str, db: Session, days: list[dict]) -> dict:
+    """date -> set of builders ticked manually within the window."""
+    if not days:
+        return {}
+    rows = db.query(models.MindLog).filter(
+        models.MindLog.user_id == user_id,
+        models.MindLog.date >= days[0]["date"],
+        models.MindLog.date <= days[-1]["date"],
+    ).all()
+    out: dict = {}
+    for r in rows:
+        if r.builder in WEEK_TARGETS:
+            out.setdefault(r.date, set()).add(r.builder)
+    return out
+
+
+def _guide_state(prefs: dict, tz_offset: int) -> Optional[dict]:
+    guide = (prefs or {}).get("mind_guide") or {}
+    start = guide.get("startDate")
+    if not start:
+        return None
+    try:
+        start_day = _parse_day(start)
+    except HTTPException:
+        return None
+    day = (_local_today(tz_offset) - start_day).days + 1
+    if day < 1:
+        day = 1
+    return {
+        "startDate": start,
+        "day": day,
+        "week": min(4, (day - 1) // 7 + 1),
+        "finished": day > GUIDE_DAYS,
+    }
+
+
+def _mind_summary(days: list[dict], manual: dict, guide: Optional[dict]) -> dict:
+    recent = days[-RECENT_DAYS:]
+    week = days[-7:]
+    merged_days = []
+    for d in days:
+        builders = sorted(set(d["builders"]) | manual.get(d["date"], set()))
+        merged_days.append({
+            "date": d["date"], "analysed": d["analysed"], "rot": d["rot"], "fog": d["fog"], "shortForm": d["shortForm"],
+            "minutes": d["minutes"], "builders": builders, "manual": sorted(manual.get(d["date"], set())),
+        })
+    week_merged = merged_days[-7:]
+    builders = {}
+    for key, target in WEEK_TARGETS.items():
+        week_days = sum(1 for d in week_merged if key in d["builders"])
+        builders[key] = {
+            "weekDays": week_days,
+            "monthDays": sum(1 for d in merged_days if key in d["builders"]),
+            "target": target,
+        }
+    week_score = round(sum(min(b["weekDays"], b["target"]) for b in builders.values()) / sum(WEEK_TARGETS.values()) * 100)
+    minute_days = [d["minutes"] for d in days if d["minutes"] > 0]
+    recent_fog = sum(1 for d in recent if d["fog"])
+    recent_short = sum(1 for d in recent if d["shortForm"])
+    recent_rot = sum(1 for d in recent if d["rot"] >= 2)
+    notes = list(dict.fromkeys(d["fogNote"] for d in days if d["fogNote"]))[-3:]
+    return {
+        "active": recent_fog >= 2 or recent_short >= 3 or recent_rot >= 2 or guide is not None,
+        "fogDays": sum(1 for d in days if d["fog"]),
+        "recentFogDays": recent_fog,
+        "shortFormDays": sum(1 for d in days if d["shortForm"]),
+        "rotDays": sum(1 for d in days if d["rot"] >= 2),
+        "heavyRotDays": sum(1 for d in days if d["rot"] >= 3),
+        "avgMinutes": round(sum(minute_days) / len(minute_days)) if minute_days else None,
+        "totalMinutes": sum(minute_days),
+        "notes": notes,
+        "builders": builders,
+        "weekScore": week_score,
+        "weekBuilderDays": sum(1 for d in week_merged if d["builders"]),
+        "days": merged_days,
+        "guide": guide,
+    }
+
+
+class BuilderToggle(BaseModel):
+    date: str
+    builder: str
+    done: bool = True
+
+
+class GuideAction(BaseModel):
+    action: Literal["start", "stop"]
+
+
+@router.post("/api/focus/mind/builders")
+def toggle_builder(
+    data: BuilderToggle,
+    tz_offset: int = Query(default=0, ge=-840, le=840),
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """Tick or untick a brain-building activity for a day. Entries contribute on their own; this is for the rest."""
+    if data.builder not in WEEK_TARGETS:
+        raise HTTPException(status_code=422, detail=f"builder must be one of {sorted(WEEK_TARGETS)}")
+    day = _parse_day(data.date)
+    today = _local_today(tz_offset)
+    if day > today or day < today - timedelta(days=WINDOW_DAYS - 1):
+        raise HTTPException(status_code=422, detail="date must be within the last four weeks and not in the future")
+    existing = db.query(models.MindLog).filter(
+        models.MindLog.user_id == user_id, models.MindLog.date == data.date, models.MindLog.builder == data.builder
+    ).first()
+    if data.done and not existing:
+        db.add(models.MindLog(user_id=user_id, date=data.date, builder=data.builder, source="manual"))
+    elif not data.done and existing:
+        db.delete(existing)
+    db.commit()
+    return {"success": True, "date": data.date, "builder": data.builder, "done": data.done}
+
+
+@router.post("/api/focus/mind/guide")
+def set_guide(
+    data: GuideAction,
+    tz_offset: int = Query(default=0, ge=-840, le=840),
+    user_id: str = Depends(verify_session),
+    db: Session = Depends(get_db),
+):
+    """Start or stop the four-week mind guide; the start date lives in the user's preferences."""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    prefs = dict(user.preferences or {})
+    if data.action == "start":
+        prefs["mind_guide"] = {"startDate": _local_today(tz_offset).isoformat()}
+    else:
+        prefs.pop("mind_guide", None)
+    user.preferences = prefs
+    flag_modified(user, "preferences")
+    db.commit()
+    return {"success": True, "guide": _guide_state(prefs, tz_offset)}
 
 
 # --------------------------------------------------------------------------
@@ -255,6 +411,8 @@ def get_overview(
     days = _signal_days(user_id, db, tz_offset)
     summary = _summarise(days)
     plan = _active_plan(user_id, db)
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    mind = _mind_summary(days, _manual_builders(user_id, db, days), _guide_state((user.preferences if user else {}) or {}, tz_offset))
     last_plan = None
     if not plan:
         previous = (
@@ -267,7 +425,8 @@ def get_overview(
             last_plan = {"behaviour": previous.behaviour, "status": previous.status, "completedAt": previous.completed_at.isoformat() if previous.completed_at else None}
     return {
         "success": True,
-        "active": summary["recentSignalDays"] >= 1 or plan is not None,
+        "active": summary["recentSignalDays"] >= 1 or plan is not None or mind["active"],
+        "mind": mind,
         "windowDays": WINDOW_DAYS,
         "days": days,
         **summary,

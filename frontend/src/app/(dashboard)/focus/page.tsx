@@ -3,6 +3,7 @@ import * as React from "react"
 import Link from "next/link"
 import { Crosshair, Waves, Check, Flame, ShieldAlert, RefreshCw, ArrowRight } from "lucide-react"
 import { UrgeSurf } from "@/components/focus/UrgeSurf"
+import { MindPanel } from "@/components/focus/MindPanel"
 import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
 import {
   fetchOverview, tzOffset, localToday, CATEGORY_LABELS, NEEDS_SUPPORT, OBJECTIVE_OPTIONS,
@@ -38,6 +39,7 @@ export default function FocusPage() {
 
   const plan = data?.plan ?? null
   const hasSignal = !!data && data.recentSignalDays > 0
+  const mindActive = !!data?.mind?.active
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-20 pt-6 fade-in">
@@ -47,7 +49,7 @@ export default function FocusPage() {
           <h1 className="text-3xl font-bold font-serif">Focus Reset</h1>
         </div>
         <p className="text-gray-500 text-lg">
-          For the habits that give a quick hit and take the day. Pick one, step away from it for a while, and learn to let urges pass.
+          For the habits that give a quick hit and take the day, and for the fog they leave behind. Pick one, step away from it for a while, learn to let urges pass, and put back what builds a sharper mind.
         </p>
       </header>
 
@@ -60,11 +62,11 @@ export default function FocusPage() {
 
       {data && <SignalPanel data={data} />}
 
-      {!hasSignal && !plan && (
+      {!hasSignal && !plan && !mindActive && (
         <Card>
           <h2 className="text-lg font-semibold">Nothing to work on right now</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Your recent entries do not mention compulsive habits, so there is no programme to run. This page comes back on its own if that changes.
+            Your recent entries do not mention compulsive habits, fog or heavy passive consumption, so there is no programme to run. This page comes back on its own if that changes.
           </p>
           {data?.lastPlan && (
             <p className="text-sm text-gray-500 mt-3">Last reset: {data.lastPlan.behaviour}, {data.lastPlan.status}.</p>
@@ -77,6 +79,8 @@ export default function FocusPage() {
       ) : hasSignal && data ? (
         <PlanWizard data={data} onCreated={reload} onTrySurf={() => setSurfOpen(true)} />
       ) : null}
+
+      {data && mindActive && <MindPanel mind={data.mind} onChanged={reload} />}
 
       <UrgeSurf open={surfOpen} onClose={() => setSurfOpen(false)} onOutcome={(acted, intensity) => logUrge(acted, intensity)} />
       <ThreeMinuteReset open={resetOpen} source="manual" onClose={() => setResetOpen(false)} />
@@ -91,7 +95,8 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
 // ---------------------------------------------------------------- signals
 
 function SignalPanel({ data }: { data: FocusOverview }) {
-  if (!data.active) return null
+  // Only the stimulation story lives here; a writer with mind signals alone gets the Mind panel instead.
+  if (!data.active || (data.signalDays === 0 && !data.plan)) return null
   const tod = Object.entries(data.timeOfDay).sort((a, b) => b[1] - a[1])[0]?.[0]
   return (
     <Card>

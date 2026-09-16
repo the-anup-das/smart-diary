@@ -15,7 +15,7 @@ export function Sidebar() {
     setMounted(true)
   }, [])
 
-  // The Focus Reset only exists in the navigation while the entries carry a stimulation signal or a plan is running.
+  // The Focus page only exists in the navigation while the entries carry a stimulation or mind signal, or a plan or guide is running.
   const [focusActive, setFocusActive] = React.useState(false)
   React.useEffect(() => {
     let cancelled = false
