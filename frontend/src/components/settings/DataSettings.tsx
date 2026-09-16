@@ -84,7 +84,12 @@ export function DataSettings() {
       
       if (res.ok) {
         const result = await res.json()
-        alert(`Successfully imported ${result.entries_imported} entries and ${result.loops_imported} open loops!`)
+        const extras = [
+          result.calm_sessions_imported ? `${result.calm_sessions_imported} reset sessions` : "",
+          result.focus_plans_imported ? `${result.focus_plans_imported} focus plans` : "",
+          result.mind_logs_imported ? `${result.mind_logs_imported} builder ticks` : "",
+        ].filter(Boolean)
+        alert(`Successfully imported ${result.entries_imported} entries and ${result.loops_imported} open loops${extras.length ? `, plus ${extras.join(", ")}` : ""}!`)
         window.location.reload()
       } else {
         alert("Failed to import data. Please check the file format.")

@@ -125,6 +125,12 @@ export function AIPrefSettings() {
               checked={!!prefs?.hide_wellbeing} 
               onChange={(val: any) => updatePref('hide_wellbeing', val)} 
            />
+           <ToggleSwitch 
+              label="Hide Focus Reset and Mind Fitness" 
+              description="Hides the Focus page, the Insights card and the cards after analysis. Entries are still analysed, so nothing is lost." 
+              checked={!!prefs?.hide_focus} 
+              onChange={(val: any) => updatePref('hide_focus', val)} 
+           />
         </div>
 
 

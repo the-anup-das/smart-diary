@@ -115,6 +115,7 @@ We have moved away from rigid, single-shot frameworks. The **Decision Junction**
 - **3-Minute Reset:** detects overthinking in your entries and guides a three-minute breathing, stillness and visualisation practice, personalised to the loop you are stuck in and tracked like a habit.
 - **Wellbeing Profile and patterns:** a six-axis radar of mood, energy, calm, agency, outward focus and clarity, each with a plain-language guide, plus a 28-day mood heatmap, weekly rhythm and overthinking trend on Insights.
 - **Focus Reset (digital wellbeing):** appears only when your entries mention compulsive, high-stimulation habits. A guided programme after Lembke's DOPAMINE structure and Sepah's dopamine fasting: one behaviour, a 7, 14 or 30-day window, self-binding rules, replacements, daily check-ins, and a ninety-second urge-surfing practice.
+- **Mind Fitness (brain rot antidote):** appears only when your entries describe brain fog, attention trouble or heavy passive consumption. Ten evidence-backed brain builders with weekly targets (sleep, long-form reading, deep work, exercise, rest, nature, learning, conversation, making, play), counted from your entries or ticked by hand, and a four-week "sharpen your mind" guide: subtract, rebuild, feed, keep.
 
 **Ask**
 - **Chat with your journal (RAG):** streaming answers grounded in your own entries with clickable date citations; conversations are saved and resumable.
@@ -169,6 +170,30 @@ Overthinking is detected in two layers and answered with a guided practice based
   <tr>
     <td align="center"><img src="docs/screenshots/reset-checkout.png" alt="Check-out screen with after rating and reflection" width="100%"><br><sub>Check-out: after rating, what to let go of, what matters</sub></td>
     <td align="center"><img src="docs/screenshots/reset-energy-card.png" alt="Energy page card with streak and 28-day strip" width="100%"><br><sub>Energy page: streak, 28-day strip and recent reflections</sub></td>
+  </tr>
+</table>
+
+---
+
+## 🧠 Mind Fitness (Brain Rot Antidote)
+
+"Brain rot" was Oxford's word of the year for 2024: the wearing down of attention and memory by overconsumption of trivial online content. Notebook does not test your brain; it reads what you write about it, and only speaks up when there is something to work on.
+
+- **Detection:** Save & Reflect records brain fog and attention complaints in your own words, minutes of passive scrolling when you state them, whether short-form video came up, and which brain-building activities actually happened. Nothing is inferred or diagnosed.
+- **Nothing shown without a signal:** no card, no nav item and no feedback card until the last two weeks carry fog or short-form days, or you start the guide.
+- **Ten builders, weekly targets:** slept enough, read long-form, deep work block, moved hard, real rest, time outdoors, learned something hard, real conversation, made something, played. Entries count on their own; tick the rest for today or any of the last seven days, and untick anything the entry got wrong. A weekly score shows how much of the target set you hit, and a by-week row shows fog days against builder days across the month.
+- **Four-week guide:** one theme a week with four practices and a journal prompt each. Week one notices and subtracts (autoplay off, phone out of the bedroom, one boring wait a day), week two rebuilds attention (twenty minutes of a paper book, one deep-work block, green walks, seven hours in bed), week three feeds the brain (hard exercise, effortful learning, live conversation, making instead of consuming), week four makes it stick (compare week one's entries with now, a consumption budget, rules written down).
+- **Together with the Focus Reset:** when the entries carry both compulsive habits and fog, the stimulation programme and the mind panel sit on the same page, and the Insights card carries both lines. At the end of the guide, week one is compared with week four in fog days and builder days.
+- **Yours to switch off and to back up:** one toggle in Settings hides Focus Reset and Mind Fitness everywhere, and the JSON export carries the stimulation and cognition signals, focus plans with their check-ins and urges, builder ticks and preferences, so an import restores them.
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/mind-fitness-panel.png" alt="Mind fitness panel with the 28-day fog strip, counts and the brain rot explainer" width="100%"><br><sub>What the entries show: fog and passive consumption by day, with the explainer open</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/mind-fitness-guide.png" alt="Today's builders with weekly targets and the four-week guide" width="100%"><br><sub>Today's builders, weekly targets and the four-week guide</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/mind-feedback-card.png" alt="Feedback card after a real analysis of a foggy entry" width="100%"><br><sub>After Save &amp; Reflect on a foggy entry: the note in your words, the minutes, and what you built</sub></td>
+    <td align="center"><img src="docs/screenshots/mind-insights-card.png" alt="Insights card carrying both the stimulation and the mind lines" width="100%"><br><sub>Insights: the stimulation and mind lines together, shown only while there is a signal</sub></td>
   </tr>
 </table>
 
@@ -278,16 +303,16 @@ Notebook provides a built-in JSON archive system located in **Settings > Data & 
 ---
 
 ## 📁 Project Structure
-- `backend/routers/analyze.py`: the Save & Reflect analysis, energy dashboard endpoints and the stimulation signal extraction.
+- `backend/routers/analyze.py`: the Save & Reflect analysis, energy dashboard endpoints, and the stimulation and cognition signal extraction.
 - `backend/routers/insights.py` and `backend/wellbeing.py`: Insights aggregation, the Wellbeing Profile axes, 28-day patterns.
 - `backend/routers/calm.py` and `backend/skills/three_minute_reset/`: the 3-Minute Reset sessions and its planner prompt.
-- `backend/routers/focus.py`: the Focus Reset overview, plans, urges and check-ins.
+- `backend/routers/focus.py`: the Focus Reset overview, plans, urges and check-ins, plus the Mind Fitness summary, builders and guide.
 - `backend/skills/decision_agent.py`: the LangGraph Swarm engine.
 - `backend/memory_service.py`: Mem0 and Qdrant integration.
 - `backend/alembic/versions/`: schema migrations, applied automatically at startup.
 - `backend/tests/`: offline API tests (`cd backend && python -m pytest tests -q`).
 - `frontend/src/components/diary/`: the editor, feedback view, templates, voice recorder and the Tab word-completion extension.
-- `frontend/src/components/calm/`, `frontend/src/components/focus/`: the reset overlay, practice card, urge surfing and Focus pages.
+- `frontend/src/components/calm/`, `frontend/src/components/focus/`: the reset overlay, practice card, urge surfing, the Mind Fitness panel and Focus pages.
 - `frontend/src/components/insights/`: charts, the Wellbeing radar, heatmap, weekly rhythm and trend cards.
 - `frontend/src/app/(dashboard)/decisions/[id]/page.tsx`: unified Dynamic Swarm UI.
 
@@ -300,7 +325,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## 🏷️ Keywords
 
-self-hosted journal, AI diary, private journaling app, mood tracker, mental health journal, CBT journaling, cognitive reframing, overthinking, rumination, mindfulness, dopamine detox, digital wellbeing, screen time, habit tracker, streaks, voice journaling, Whisper, chat with your notes, RAG, LangGraph, mem0, Qdrant, Next.js, FastAPI, PostgreSQL, Docker, NAS, Raspberry Pi, Ollama, local LLM, privacy-first AI, Day One alternative, Obsidian alternative for journaling.
+self-hosted journal, AI diary, private journaling app, mood tracker, mental health journal, CBT journaling, cognitive reframing, overthinking, rumination, mindfulness, dopamine detox, digital wellbeing, screen time, brain rot, brain fog, attention span, focus, deep work, digital detox, doomscrolling, short-form video, cognitive fitness, habit tracker, streaks, voice journaling, Whisper, chat with your notes, RAG, LangGraph, mem0, Qdrant, Next.js, FastAPI, PostgreSQL, Docker, NAS, Raspberry Pi, Ollama, local LLM, privacy-first AI, Day One alternative, Obsidian alternative for journaling.
 
 ## 📄 License
 MIT License. See [LICENSE](./LICENSE) for details.

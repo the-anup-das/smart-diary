@@ -64,6 +64,8 @@ class FeedbackReport(Base):
 
     # Focus Reset: reward-seeking / overstimulation signals extracted from the entry
     stimulation_data = Column(JSON, nullable=True)
+    # Mind fitness: attention, fog, passive consumption and brain-building activities from the entry
+    cognition_data = Column(JSON, nullable=True)
     
     # Token Usage
     prompt_tokens = Column(Integer, default=0)
@@ -202,4 +204,14 @@ class FocusCheckin(Base):
     gave_in = Column(Boolean, default=False)
     sleep_ok = Column(Boolean, nullable=True)
     note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class MindLog(Base):
+    """A brain-building activity ticked off manually for a day (entries contribute automatically)."""
+    __tablename__ = "mind_logs"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(String, nullable=False)        # YYYY-MM-DD local
+    builder = Column(String, nullable=False)     # deep_reading | learning | creating | deep_work | exercise | nature | conversation | play | rest | sleep
+    source = Column(String, default="manual")
     created_at = Column(DateTime, default=datetime.utcnow)

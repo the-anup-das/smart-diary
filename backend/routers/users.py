@@ -20,6 +20,9 @@ class FeedbackImport(BaseModel):
     cognitiveReframes: Optional[Any] = None
     grammarFixes: Optional[Any] = None
     openLoops: Optional[Any] = None
+    energyData: Optional[Any] = None
+    stimulationData: Optional[Any] = None
+    cognitionData: Optional[Any] = None
 
 class EntryImport(BaseModel):
     id: str
@@ -49,10 +52,51 @@ class CalmSessionImport(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
+class FocusCheckinImport(BaseModel):
+    date: str
+    urges: Optional[int] = 0
+    gave_in: Optional[bool] = False
+    sleep_ok: Optional[bool] = None
+    note: Optional[str] = None
+    created_at: Optional[str] = None
+
+class FocusPlanImport(BaseModel):
+    id: Optional[str] = None
+    behaviour: str
+    category: Optional[str] = None
+    objectives: Optional[str] = None
+    problems: Optional[str] = None
+    abstinence_days: Optional[int] = 7
+    start_date: str
+    status: Optional[str] = "active"
+    rules: Optional[Any] = None
+    replacements: Optional[Any] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    checkins: Optional[List[FocusCheckinImport]] = None
+
+class FocusUrgeImport(BaseModel):
+    plan_id: Optional[str] = None
+    logged_at: Optional[str] = None
+    intensity: Optional[int] = None
+    acted: Optional[bool] = False
+    trigger: Optional[str] = None
+    note: Optional[str] = None
+
+class MindLogImport(BaseModel):
+    date: str
+    builder: str
+    source: Optional[str] = "manual"
+    created_at: Optional[str] = None
+
 class ImportPayload(BaseModel):
     entries: List[EntryImport]
     openLoops: List[OpenLoopImport]
     calmSessions: Optional[List[CalmSessionImport]] = None
+    focusPlans: Optional[List[FocusPlanImport]] = None
+    focusUrges: Optional[List[FocusUrgeImport]] = None
+    mindLogs: Optional[List[MindLogImport]] = None
+    preferences: Optional[Dict[str, Any]] = None
 
 @router.get("/api/users/me")
 def get_me(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
@@ -108,9 +152,13 @@ def export_data(user_id: str = Depends(verify_session), db: Session = Depends(ge
             "name": user.name,
             "email": user.email,
         },
+        "preferences": dict(user.preferences or {}),
         "entries": [],
         "openLoops": [],
-        "calmSessions": []
+        "calmSessions": [],
+        "focusPlans": [],
+        "focusUrges": [],
+        "mindLogs": [],
     }
     
     for entry in entries:
@@ -128,7 +176,10 @@ def export_data(user_id: str = Depends(verify_session), db: Session = Depends(ge
                 "topics": fb.topics,
                 "cognitiveReframes": fb.cognitive_reframes,
                 "grammarFixes": fb.grammar_fixes,
-                "openLoops": fb.open_loops
+                "openLoops": fb.open_loops,
+                "energyData": fb.energy_data,
+                "stimulationData": fb.stimulation_data,
+                "cognitionData": fb.cognition_data,
             }
         export_payload["entries"].append(entry_data)
         
@@ -158,6 +209,28 @@ def export_data(user_id: str = Depends(verify_session), db: Session = Depends(ge
             "started_at": s.started_at.isoformat() if s.started_at else None,
             "completed_at": s.completed_at.isoformat() if s.completed_at else None,
         })
+
+    def _iso(ts):
+        return ts.isoformat() if ts else None
+
+    checkins_by_plan: Dict[str, list] = {}
+    for c in db.query(models.FocusCheckin).filter(models.FocusCheckin.user_id == user_id).order_by(models.FocusCheckin.date).all():
+        checkins_by_plan.setdefault(c.plan_id, []).append({
+            "date": c.date, "urges": c.urges, "gave_in": bool(c.gave_in), "sleep_ok": c.sleep_ok, "note": c.note, "created_at": _iso(c.created_at),
+        })
+    for p in db.query(models.FocusPlan).filter(models.FocusPlan.user_id == user_id).order_by(models.FocusPlan.created_at).all():
+        export_payload["focusPlans"].append({
+            "id": p.id, "behaviour": p.behaviour, "category": p.category, "objectives": p.objectives, "problems": p.problems,
+            "abstinence_days": p.abstinence_days, "start_date": p.start_date, "status": p.status, "rules": p.rules or [],
+            "replacements": p.replacements or [], "created_at": _iso(p.created_at), "completed_at": _iso(p.completed_at),
+            "checkins": checkins_by_plan.get(p.id, []),
+        })
+    for u in db.query(models.FocusUrge).filter(models.FocusUrge.user_id == user_id).order_by(models.FocusUrge.logged_at).all():
+        export_payload["focusUrges"].append({
+            "plan_id": u.plan_id, "logged_at": _iso(u.logged_at), "intensity": u.intensity, "acted": bool(u.acted), "trigger": u.trigger, "note": u.note,
+        })
+    for m in db.query(models.MindLog).filter(models.MindLog.user_id == user_id).order_by(models.MindLog.date).all():
+        export_payload["mindLogs"].append({"date": m.date, "builder": m.builder, "source": m.source or "manual", "created_at": _iso(m.created_at)})
 
     return export_payload
 
@@ -196,7 +269,10 @@ def import_data(payload: ImportPayload, user_id: str = Depends(verify_session), 
                 topics=fb.topics,
                 cognitive_reframes=fb.cognitiveReframes,
                 grammar_fixes=fb.grammarFixes,
-                open_loops=fb.openLoops
+                open_loops=fb.openLoops,
+                energy_data=fb.energyData,
+                stimulation_data=fb.stimulationData,
+                cognition_data=fb.cognitionData,
             )
             db.add(new_fb)
 
@@ -243,12 +319,63 @@ def import_data(payload: ImportPayload, user_id: str = Depends(verify_session), 
             completed_at=_parse(s.completed_at),
         ))
 
+    # Focus plans keep their check-ins. Only one plan may be active; any further active one is recorded as abandoned.
+    has_active = db.query(models.FocusPlan).filter(models.FocusPlan.user_id == user_id, models.FocusPlan.status == "active").first() is not None
+    plan_id_map: Dict[str, str] = {}
+    for p in (payload.focusPlans or []):
+        status_value = p.status or "active"
+        if status_value == "active":
+            if has_active:
+                status_value = "abandoned"
+            has_active = True
+        new_plan = models.FocusPlan(
+            user_id=user_id, behaviour=p.behaviour, category=p.category, objectives=p.objectives, problems=p.problems,
+            abstinence_days=p.abstinence_days or 7, start_date=p.start_date, status=status_value,
+            rules=p.rules or [], replacements=p.replacements or [],
+            created_at=_parse(p.created_at) or datetime.utcnow(), completed_at=_parse(p.completed_at),
+        )
+        db.add(new_plan)
+        db.flush()
+        if p.id:
+            plan_id_map[p.id] = new_plan.id
+        for c in (p.checkins or []):
+            db.add(models.FocusCheckin(
+                user_id=user_id, plan_id=new_plan.id, date=c.date, urges=c.urges or 0, gave_in=bool(c.gave_in),
+                sleep_ok=c.sleep_ok, note=c.note, created_at=_parse(c.created_at) or datetime.utcnow(),
+            ))
+    for u in (payload.focusUrges or []):
+        db.add(models.FocusUrge(
+            user_id=user_id, plan_id=plan_id_map.get(u.plan_id) if u.plan_id else None,
+            logged_at=_parse(u.logged_at) or datetime.utcnow(), intensity=u.intensity, acted=bool(u.acted), trigger=u.trigger, note=u.note,
+        ))
+
+    existing_logs = {(m.date, m.builder, m.source or "manual") for m in db.query(models.MindLog).filter(models.MindLog.user_id == user_id).all()}
+    mind_logs_imported = 0
+    for m in (payload.mindLogs or []):
+        key = (m.date, m.builder, m.source or "manual")
+        if key in existing_logs:
+            continue
+        existing_logs.add(key)
+        db.add(models.MindLog(user_id=user_id, date=m.date, builder=m.builder, source=m.source or "manual", created_at=_parse(m.created_at) or datetime.utcnow()))
+        mind_logs_imported += 1
+
+    # Preferences from the backup fill in what this account has not set; nothing already chosen is overwritten.
+    if payload.preferences:
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if user:
+            merged = dict(payload.preferences)
+            merged.update(user.preferences or {})
+            user.preferences = merged
+
     db.commit()
     return {
         "success": True,
         "entries_imported": len(payload.entries),
         "loops_imported": len(payload.openLoops),
         "calm_sessions_imported": len(payload.calmSessions or []),
+        "focus_plans_imported": len(payload.focusPlans or []),
+        "focus_urges_imported": len(payload.focusUrges or []),
+        "mind_logs_imported": mind_logs_imported,
     }
 
 class MoodCheckin(BaseModel):
