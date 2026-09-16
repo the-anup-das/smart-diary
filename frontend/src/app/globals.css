@@ -86,3 +86,13 @@ body {
 .dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
 .dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+/* Editor: Tab word completion ghost text and task lists */
+.word-ghost { opacity: 0.38; cursor: pointer; user-select: none; }
+.ProseMirror ul[data-type="taskList"] { list-style: none; padding-left: 0.25rem; }
+.ProseMirror ul[data-type="taskList"] li { display: flex; gap: 0.6rem; align-items: flex-start; }
+.ProseMirror ul[data-type="taskList"] li > label { margin-top: 0.45rem; flex-shrink: 0; }
+.ProseMirror ul[data-type="taskList"] li > label input { accent-color: var(--primary); width: 1rem; height: 1rem; cursor: pointer; }
+.ProseMirror ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.ProseMirror ul[data-type="taskList"] li > div > p { margin: 0; }
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div { opacity: 0.55; text-decoration: line-through; }

@@ -19,6 +19,11 @@ import { MoodCheckin } from "@/components/wellbeing/MoodCheckin"
 import { ReflectingIndicator } from "@/components/ui/ReflectingIndicator"
 import { LoopNudge, detectLoopScore } from "@/components/calm/LoopNudge"
 import { ThreeMinuteReset } from "@/components/calm/ThreeMinuteReset"
+import Typography from '@tiptap/extension-typography'
+import { TaskList, TaskItem } from '@tiptap/extension-list'
+import { WordCompletion } from './extensions/WordCompletion'
+import { loadVocabulary, type CompletionIndex } from '@/lib/wordCompletion'
+import { WritingGoalChip } from './WritingGoalChip'
 
 // Inside a list, Tab must ALWAYS stay in the editor: indent when possible,
 // otherwise do nothing. Without this, an impossible indent (e.g. the first
@@ -98,6 +103,17 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
   const [nudgeResetOpen, setNudgeResetOpen] = React.useState(false)
   const [resetDoneToday, setResetDoneToday] = React.useState(false)
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  // Writing experience: readable width, typewriter scrolling and Tab word completion (see AppearanceSettings).
+  const preferencesRef = React.useRef<any>({})
+  const completionIndexRef = React.useRef<CompletionIndex | null>(null)
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const [widgetsPinned, setWidgetsPinned] = React.useState(false)
+  // Goal and streak in the header, and a gentle nudge when the writer stalls below the goal.
+  const [streakInfo, setStreakInfo] = React.useState<{ streak: number; wroteToday: boolean }>({ streak: 0, wroteToday: false })
+  const [stuck, setStuck] = React.useState(false)
+  // Live word count: the editor does not re-render on every keystroke, so the count is kept in state.
+  const [liveWords, setLiveWords] = React.useState(0)
+  const idleRef = React.useRef<NodeJS.Timeout | null>(null)
   const typeQueueRef = React.useRef<string[]>([])
 
   React.useEffect(() => {
@@ -112,6 +128,38 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
         setPrefsLoaded(true)
       })
       .catch(() => setPrefsLoaded(true))
+  }, [])
+
+  React.useEffect(() => { preferencesRef.current = preferences }, [preferences])
+
+  React.useEffect(() => {
+    let cancelled = false
+    fetch(`/api/entries/streak?tz_offset=${-new Date().getTimezoneOffset()}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => { if (!cancelled && data && typeof data.streak === 'number') setStreakInfo(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [currentEntryId])
+
+  React.useEffect(() => () => { if (idleRef.current) clearTimeout(idleRef.current) }, [])
+
+  React.useEffect(() => {
+    let cancelled = false
+    loadVocabulary().then(index => { if (!cancelled) completionIndexRef.current = index })
+    return () => { cancelled = true }
+  }, [])
+
+  // Typewriter scrolling: keep the line being typed a little above the middle of the writing area.
+  const typewriterScroll = React.useCallback((ed: any) => {
+    if (preferencesRef.current?.typewriter === false) return
+    const container = scrollRef.current
+    if (!container || !ed?.view?.hasFocus?.()) return
+    let coords: { top: number } | null = null
+    try { coords = ed.view.coordsAtPos(ed.state.selection.from) } catch { return }
+    if (!coords) return
+    const rect = container.getBoundingClientRect()
+    const delta = coords.top - (rect.top + rect.height * 0.42)
+    if (Math.abs(delta) > 28) container.scrollTop += delta
   }, [])
 
   // Pennebaker expressive-writing program: next day (1-4) or null when done
@@ -188,6 +236,14 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       StarterKit,
       ListTabKeymap,
       Image,
+      Typography,
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      WordCompletion.configure({
+        getIndex: () => completionIndexRef.current,
+        isEnabled: () => preferencesRef.current?.word_completion !== false,
+        minPrefix: 3,
+      }),
       Placeholder.configure({
         placeholder: "What's heavily occupying your thoughts today? (Use '-' for bullets or '#' for headers)",
         emptyEditorClass: 'cursor-text before:content-[attr(data-placeholder)] before:absolute before:text-gray-600 before:opacity-50 before:pointer-events-none',
@@ -204,13 +260,20 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
     onUpdate: ({ editor }) => {
       // Clear transient AI engine errors when the user resumes typing
       if (aiError) setAiError(null);
-      setLoopScore(detectLoopScore(editor.getText()))
+      const liveText = editor.getText()
+      setLoopScore(detectLoopScore(liveText))
+      setLiveWords(liveText.trim().split(/\s+/).filter(w => w.length > 0).length)
+      typewriterScroll(editor)
+      setStuck(false)
+      if (idleRef.current) clearTimeout(idleRef.current)
+      idleRef.current = setTimeout(() => setStuck(true), 30000)
 
       // Trigger debounce save
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
       
       setIsSaving(true)
       timeoutRef.current = setTimeout(async () => {
+        completionIndexRef.current?.learn(editor.getText())
         try {
           const htmlContent = editor.getHTML()
 
@@ -391,7 +454,13 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
     processTypeQueue()
   }, [editor, processTypeQueue])
 
-  const wordCount = editor ? editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+  React.useEffect(() => {
+    if (editor) setLiveWords(editor.getText().trim().split(/\s+/).filter(w => w.length > 0).length)
+  }, [editor])
+  const wordCount = liveWords
+  const writingStarted = wordCount >= 20 || !!feedbackData
+  const readableWidth = preferences?.readable_width !== false
+  const dailyGoal = Number(preferences?.targets?.daily_words) || 200
 
   return (
     <div className={zenMode
@@ -451,12 +520,8 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
               modelName={sttModel}
             />
           )}
-          {preferences?.targets?.daily_words && !preferences?.hide_word_target ? (
-            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full border ${wordCount >= preferences.targets.daily_words ? 'bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400' : 'bg-black/5 dark:bg-white/5 border-black/5 dark:border-white/5 text-gray-500 dark:text-gray-400'}`}>
-              <span className="text-sm font-mono tracking-wide font-medium">
-                {wordCount} <span className={`opacity-60 font-normal ${wordCount >= preferences.targets.daily_words ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>/ {preferences.targets.daily_words} words</span>
-              </span>
-            </div>
+          {!preferences?.hide_word_target ? (
+            <WritingGoalChip wordCount={wordCount} goal={dailyGoal} streak={streakInfo.streak} wroteToday={streakInfo.wroteToday || wordCount > 0} />
           ) : (
             <span className="text-sm text-gray-400 font-mono tracking-wide">{wordCount} words</span>
           )}
@@ -488,7 +553,14 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
         <MoodCheckin onCheckin={setArrivalMood} />
       )}
 
-      {!zenMode && !isBackdate && (
+      {/* Prompts and memories step aside once writing is under way, so the page reads as a blank page, not a dashboard. */}
+      {!zenMode && !isBackdate && (writingStarted && !widgetsPinned ? (
+        <div className="px-2 lg:px-6 mb-4">
+          <button onClick={() => setWidgetsPinned(true)} className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors cursor-pointer">
+            Show prompts and memories
+          </button>
+        </div>
+      ) : (
         <>
           <DecisionNudge />
 
@@ -497,16 +569,28 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
           <EchoesWidget />
 
           <MorningIntentions isVisible={showIntentions} onSelect={handleSelectIntention} />
+        </>
+      ))}
 
+      {!zenMode && !isBackdate && (
+        <>
           <LoopNudge score={loopScore} wordCount={wordCount} hidden={!!preferences?.hide_calm_reset || resetDoneToday} onStart={() => setNudgeResetOpen(true)} />
           <ThreeMinuteReset open={nudgeResetOpen} source="entry" onClose={() => setNudgeResetOpen(false)} onCompleted={() => setResetDoneToday(true)} onAppendToEntry={handleAppendToEntry} />
         </>
       )}
 
-      <div className={`flex-1 relative overflow-hidden group ${zenMode ? "max-w-3xl mx-auto w-full min-h-0" : ""}`}>
-        <div className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 pt-4 pb-[300px] custom-scrollbar overflow-y-auto scroll-smooth scroll-pb-[200px]`}>
+      <div className={`flex-1 relative overflow-hidden group ${zenMode || readableWidth ? "max-w-3xl mx-auto w-full min-h-0" : ""}`}>
+        <div ref={scrollRef} className={`w-full h-full bg-transparent ${preferences?.typography === 'sans' ? 'font-sans' : 'font-serif'} text-lg leading-loose text-gray-800 dark:text-gray-200 px-2 lg:px-6 pt-4 pb-[300px] custom-scrollbar overflow-y-auto scroll-smooth scroll-pb-[200px]`}>
           <EditorContent editor={editor} />
         </div>
+        {stuck && wordCount > 0 && wordCount < dailyGoal && !feedbackData && !zenMode && !isBackdate && !widgetsPinned && (
+          <button
+            onClick={() => { setWidgetsPinned(true); setShowIntentions(true); setStuck(false); window.scrollTo({ top: 0, behavior: "smooth" }) }}
+            className="absolute bottom-6 left-4 lg:left-8 z-10 px-3 py-1.5 rounded-full bg-white/80 dark:bg-black/50 backdrop-blur border border-black/10 dark:border-white/10 text-xs text-gray-600 dark:text-gray-300 hover:text-primary hover:border-primary/40 transition-colors cursor-pointer fade-in"
+          >
+            Stuck? Try a prompt
+          </button>
+        )}
         {/* Subtle gradient overlay to fade text at bottom elegantly */}
         <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-background to-transparent pointer-events-none"></div>
       </div>

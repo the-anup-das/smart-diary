@@ -1,6 +1,7 @@
 "use client"
 import * as React from "react"
-import type { WellbeingAxis } from "@/lib/wellbeing"
+import { Info, ExternalLink, X } from "lucide-react"
+import { AXIS_GUIDES, type WellbeingAxis } from "@/lib/wellbeing"
 
 /**
  * WellbeingRadar - six capacities on one scale, drawn as a radar with the exact values
@@ -29,6 +30,7 @@ export function WellbeingRadar({
   compareLabel?: string | null
 }) {
   const [hovered, setHovered] = React.useState<number | null>(null)
+  const [openGuide, setOpenGuide] = React.useState<string | null>(null)
   const n = axes.length
   const angle = (i: number) => -Math.PI / 2 + (i * 2 * Math.PI) / n
   const point = (i: number, radius: number): [number, number] => [CX + Math.cos(angle(i)) * radius, CY + Math.sin(angle(i)) * radius]
@@ -121,11 +123,47 @@ export function WellbeingRadar({
                     {delta === null ? "" : delta > 0 ? `+${delta}` : delta < 0 ? `−${Math.abs(delta)}` : "0"}
                   </span>
                 )}
+                <button
+                  onClick={() => setOpenGuide(openGuide === a.key ? null : a.key)}
+                  aria-expanded={openGuide === a.key}
+                  aria-label={`About ${a.label}`}
+                  title={`What ${a.label.toLowerCase()} means and why it matters`}
+                  className={`p-1 rounded-md transition-colors cursor-pointer ${openGuide === a.key ? "text-primary bg-primary/10" : "text-gray-400 hover:text-primary hover:bg-primary/5"}`}
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
               </div>
             )
           })}
         </div>
+        {openGuide && AXIS_GUIDES[openGuide] && (
+          <AxisGuidePanel axisKey={openGuide} label={axes.find(a => a.key === openGuide)?.label || openGuide} onClose={() => setOpenGuide(null)} />
+        )}
+        <div className="hidden">
+        </div>
       </div>
+    </div>
+  )
+}
+
+/** What an axis means, why it matters for wellbeing, how this app measures it, and where to read more. */
+function AxisGuidePanel({ axisKey, label, onClose }: { axisKey: string; label: string; onClose: () => void }) {
+  const guide = AXIS_GUIDES[axisKey]
+  return (
+    <div className="mt-3 p-4 rounded-xl bg-primary/5 border border-primary/15 text-sm fade-in" role="region" aria-label={`About ${label}`}>
+      <div className="flex items-start justify-between gap-3">
+        <h4 className="font-semibold text-gray-900 dark:text-gray-100">{label}</h4>
+        <button onClick={onClose} aria-label="Close" className="p-1 rounded-md text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+      </div>
+      <p className="text-gray-700 dark:text-gray-300 mt-1">{guide.what}</p>
+      <dl className="mt-3 space-y-2 text-[13px]">
+        <div><dt className="text-[10px] uppercase tracking-widest text-gray-400">Why it matters</dt><dd className="text-gray-700 dark:text-gray-300">{guide.why}</dd></div>
+        <div><dt className="text-[10px] uppercase tracking-widest text-gray-400">How it is measured here</dt><dd className="text-gray-600 dark:text-gray-400">{guide.measured}</dd></div>
+        <div><dt className="text-[10px] uppercase tracking-widest text-gray-400">What tends to move it</dt><dd className="text-gray-600 dark:text-gray-400">{guide.moves}</dd></div>
+      </dl>
+      <a href={guide.link.href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-primary hover:underline">
+        Read more: {guide.link.label} <ExternalLink className="w-3 h-3" />
+      </a>
     </div>
   )
 }
