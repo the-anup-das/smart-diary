@@ -467,9 +467,10 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
       ? "fixed inset-0 z-[100] bg-background flex flex-col pt-6 px-4 lg:px-0 overflow-hidden"
       : "flex flex-col h-full w-full pt-6"
     }>
-      <div className={`flex flex-col md:flex-row gap-4 justify-between items-start md:items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">
+      {/* The date always reads in full: the control cluster wraps onto its own line when the two do not fit side by side. */}
+      <div className={`flex flex-wrap gap-x-6 gap-y-3 justify-between items-center px-2 lg:px-6 relative z-30 ${zenMode ? "mb-6 max-w-3xl mx-auto w-full" : "mb-10"}`}>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <h1 className="text-2xl sm:text-3xl font-serif font-bold tracking-tight text-gray-900 dark:text-gray-100 whitespace-nowrap">
             {(entryDate ? new Date(entryDate + 'T00:00:00') : new Date()).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </h1>
           {isBackdate && (
@@ -481,7 +482,7 @@ export function JournalEditor({ initialContent = "", initialId = null, entryDate
             </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-2 md:gap-4 fade-in">
+        <div className="flex flex-wrap items-center gap-2 md:gap-3 ml-auto fade-in">
           {preferences?.enable_deletion && currentEntryId && (
             <button
               onClick={handleDelete}
