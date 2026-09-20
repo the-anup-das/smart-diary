@@ -32,21 +32,23 @@ BASE_MODELS = {
     "qwen": "unsloth/Qwen2.5-3B-Instruct",
     "llama": "unsloth/Llama-3.2-3B-Instruct",
     "phi": "unsloth/Phi-3.5-mini-instruct",
-    "gemma4": "unsloth/gemma-4-E2B-it",   # 2.3B effective parameters, Apache 2.0, native system role, thinking switchable
+    "gemma4": "unsloth/gemma-4-E2B-it",       # 2.3B effective parameters, Apache 2.0, native system role, thinking switchable
+    "gemma4-e4b": "unsloth/gemma-4-E4B-it",   # about 4B effective: the same family in the 3B students' class, for a like-for-like comparison
 }
-CHAT_TEMPLATES = {"qwen": "qwen-2.5", "llama": "llama-3.1", "phi": "phi-3", "gemma4": "gemma-4"}
+CHAT_TEMPLATES = {"qwen": "qwen-2.5", "llama": "llama-3.1", "phi": "phi-3", "gemma4": "gemma-4", "gemma4-e4b": "gemma-4"}
 # The markers train_on_responses_only needs to mask everything but the assistant turn.
 RESPONSE_MARKERS = {
     "qwen": ("<|im_start|>user\n", "<|im_start|>assistant\n"),
     "llama": ("<|start_header_id|>user<|end_header_id|>\n\n", "<|start_header_id|>assistant<|end_header_id|>\n\n"),
     "phi": ("<|user|>\n", "<|assistant|>\n"),
     "gemma4": ("<|turn>user\n", "<|turn>model\n"),
+    "gemma4-e4b": ("<|turn>user\n", "<|turn>model\n"),
 }
 # Gemma 4 is multimodal and reasons before answering: it loads through FastModel with the vision
 # and audio layers frozen, and every training text is rendered with thinking off, the way the
 # student is served. Its tokenizer adds <bos> itself, so the rendered text must not carry one.
-MULTIMODAL = {"gemma4"}
-THINKING_SWITCH = {"gemma4"}
+MULTIMODAL = {"gemma4", "gemma4-e4b"}
+THINKING_SWITCH = {"gemma4", "gemma4-e4b"}
 
 
 def render_chat(tokenizer, conversation: list[dict], family: str, add_generation_prompt: bool = False) -> str:

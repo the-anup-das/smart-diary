@@ -160,6 +160,7 @@ schedule, rank 32.
 | `llama` | Llama-3.2-3B-Instruct | the reference 3B; Llama licence |
 | `phi` | Phi-3.5-mini-instruct | 3.8B, MIT |
 | `gemma4` | Gemma 4 E2B-it | 2.3B effective parameters, so the fastest on a CPU; 128k context, native system role, Apache 2.0; multimodal weights with the vision and audio layers left frozen |
+| `gemma4-e4b` | Gemma 4 E4B-it | about 4B effective, the same family in the 3B students' class; the quality pick if the E2B falls short of the gate |
 
 Gemma 4 reasons before answering unless told not to. The training texts are rendered with
 thinking off, the evaluator renders its prompts the same way, and the serve script and the compose
