@@ -93,6 +93,10 @@ down at once. So keep the cap at 2 for a single-GPU endpoint and let `--concurre
 samples queue for the busy host and keep working on the others. The banner prints the cap per
 host, and a sample that waits more than a second for a slot says so on the board.
 
+The board takes keys while it runs: up and down scroll the table one sample, page up and page
+down a screen, home returns to following the oldest samples, and `q` finishes the samples in
+flight and stops without losing them (unlike Ctrl+C, which drops whatever is mid-flight).
+
 `--plain` turns the live table off and prints only the lines, which is what you want when you
 need to scroll back through the history or pipe the run to a file; a status line then reports
 where every sample is every 30 seconds (`BOARD_HEARTBEAT_S`). The live board repaints in place,

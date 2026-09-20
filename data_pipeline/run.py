@@ -42,6 +42,7 @@ from data_pipeline.agents.llm_client import LLMCallError, acall_llm
 from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
 from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
+from data_pipeline.keys import KeyReader
 from data_pipeline.lessons import LessonsStore
 from data_pipeline.reputation import JudgeReputation
 from data_pipeline.status import TRACKER, fmt_seconds
@@ -472,18 +473,51 @@ class RunBoard:
         self.live = None if self.plain else Live(self, console=console, refresh_per_second=4)
         self.heartbeat_every = float(os.getenv("BOARD_HEARTBEAT_S", "30"))
         self._last_heartbeat = 0.0
+        self.scroll = 0                 # first sample row shown; the arrows move this window
+        self.follow = True              # stay on the oldest samples unless the reader scrolled away
+        self.stop_requested = False     # q: let the samples in flight finish, spawn no more
+        self.keys = KeyReader()
 
     def __enter__(self) -> "RunBoard":
         TRACKER.note_listeners.append(self._on_note)
         if self.live is not None:
+            self.keys.start()
             self.live.start()
         return self
 
     def __exit__(self, *exc) -> None:
         if self.live is not None:
             self.live.stop()
+        self.keys.stop()
         if self._on_note in TRACKER.note_listeners:
             TRACKER.note_listeners.remove(self._on_note)
+
+    def handle_keys(self) -> None:
+        """Apply whatever was typed since the last tick."""
+        for key in self.keys.drain():
+            self.handle_key(key)
+
+    def handle_key(self, key: str) -> None:
+        page = max(1, self.visible_rows() - 1)
+        rows = len(TRACKER)
+        if key == "up":
+            self.scroll, self.follow = max(0, self.scroll - 1), False
+        elif key == "down":
+            self.scroll, self.follow = self.scroll + 1, False
+        elif key == "pgup":
+            self.scroll, self.follow = max(0, self.scroll - page), False
+        elif key == "pgdn":
+            self.scroll, self.follow = self.scroll + page, False
+        elif key == "home":
+            self.scroll, self.follow = 0, True
+        elif key == "end":
+            self.scroll, self.follow = max(0, rows - self.visible_rows()), False
+        elif key == "quit" and not self.stop_requested:
+            self.stop_requested = True
+            self.log("[bold yellow]Finishing the samples in flight, then stopping. Approved samples are already saved.[/bold yellow]")
+        self.scroll = max(0, min(self.scroll, max(0, rows - self.visible_rows())))
+        if self.scroll == 0:
+            self.follow = True
 
     def heartbeat(self, force: bool = False) -> None:
         """In plain mode, print where every sample is every BOARD_HEARTBEAT_S seconds."""
@@ -540,9 +574,16 @@ class RunBoard:
         return Text.from_markup("[bold]Now on:[/bold] " + "   ".join(parts))
 
     def visible_rows(self) -> int:
-        """How many sample rows fit under the progress bar, counters, tally and table header."""
+        """How many sample rows fit under the progress bar, counters, tally, table header and the key hint."""
         height = self.console.size.height or 24
-        return max(3, height - 9)
+        return max(3, height - 10)
+
+    def hint(self, shown: int, total: int) -> Text:
+        if self.plain or not self.keys.active:
+            return Text("")
+        window = f"showing {self.scroll + 1} to {self.scroll + shown} of {total}" if total > shown else f"showing all {total}"
+        state = " [yellow]stopping after these[/yellow]" if self.stop_requested else ""
+        return Text.from_markup(f"[dim]{window}   up and down scroll, page up and page down jump, home follows the oldest, q finishes and stops[/dim]{state}")
 
     def table(self, max_rows: int | None = None) -> Table:
         table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, expand=False)
@@ -555,18 +596,22 @@ class RunBoard:
         now = time.monotonic()
         rows = sorted(TRACKER.rows(), key=lambda s: s.started)   # oldest first: the ones nearest a timeout
         limit = self.visible_rows() if max_rows is None else max_rows
-        for s in rows[:limit]:
+        start = 0 if self.follow else max(0, min(self.scroll, max(0, len(rows) - limit)))
+        self.window = (start, min(len(rows), start + limit))
+        for s in rows[start:start + limit]:
             style = self.STAGE_STYLES.get(s.stage, "white")
             table.add_row(str(s.attempt), f"[{style}]{s.stage}[/{style}]", escape(s.detail), fmt_seconds(s.stage_elapsed(now)), fmt_seconds(s.elapsed(now)), escape(s.note))
-        hidden = len(rows) - min(len(rows), limit)
-        if hidden:
+        hidden = len(rows) - (self.window[1] - self.window[0])
+        if hidden and not self.keys.active:
             table.add_row("", f"[dim]and {hidden} more, newest first; the tally above counts them all[/dim]", "", "", "", "")
         if not rows:
             table.add_row("-", "[dim]nothing in flight[/dim]", "", "", "", "")
         return table
 
     def __rich__(self):
-        return Group(self.progress, self.counters(), self.tally(), self.table())
+        table = self.table()
+        start, end = getattr(self, "window", (0, 0))
+        return Group(self.progress, self.counters(), self.tally(), table, self.hint(end - start, len(TRACKER)))
 
 
 def _host_limits_line(runtime: PipelineRuntime) -> str:
@@ -673,17 +718,23 @@ async def amain() -> None:
             + ("; a status line follows every few samples.[/dim]" if board.plain else ", and the table under them shows where each sample is right now.[/dim]")
         )
         pending: set[asyncio.Task] = set()
-        while manager.session_approved < to_add and not manager.aborted:
+        while manager.session_approved < to_add and not manager.aborted and not board.stop_requested:
             limit = config.CONCURRENCY_CONTROLLER.current
             while len(pending) < limit and manager.session_approved + len(pending) < to_add:
                 pending.add(asyncio.create_task(manager.run_single_pipeline(board)))
             if not pending:
                 break
-            _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)
+            _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=0.2)
+            board.handle_keys()
             board.heartbeat()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        if pending and board.stop_requested:
+            board.log(f"[yellow]Waiting for {len(pending)} samples in flight.[/yellow]")
+        while pending:
+            _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=0.2)
+            board.handle_keys()
 
+    if board.stop_requested:
+        console.print("[bold yellow]Stopped on request; every approved sample is in the dataset. Run the same command to add more.[/bold yellow]")
     if manager.aborted:
         console.print(f"[bold red]Run stopped: {manager.aborted}. Fix the endpoint and run the same command to resume.[/bold red]")
     table = Table(title="[bold green]Session summary[/bold green]", border_style="bright_blue")

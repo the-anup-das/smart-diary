@@ -124,12 +124,12 @@ def test_board_fits_the_terminal_and_counts_every_sample(tmp_path, monkeypatch):
         TRACKER.start(i)
         TRACKER.stage("writer" if i > 3 else "judge", "drafting on api.example.com")
     try:
-        assert board.visible_rows() == 11                       # 20 rows of terminal minus the bar, counters, tally and header
+        assert board.visible_rows() == 10                       # 20 rows of terminal minus the bar, counters, tally, header and key hint
         rendered = console.render_str  # noqa: F841
         with console.capture() as cap:
             console.print(board.table())
         text = cap.get()
-        assert "and 4 more" in text and text.count("drafting on api.example.com") == 11
+        assert "and 5 more" in text and text.count("drafting on api.example.com") == 10
         assert "\n 1 " in "\n" + text and "#15" not in text     # oldest first, the newest are the hidden ones
         with console.capture() as cap:
             console.print(board.tally())
@@ -179,3 +179,98 @@ def test_plain_mode_prints_lines_instead_of_a_live_region(tmp_path, monkeypatch)
     finally:
         TRACKER.finish(1)
         TRACKER.finish(2)
+
+
+def _board(tmp_path, monkeypatch, *, height=20, plain=False):
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from data_pipeline import config
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.run import RunBoard
+
+    monkeypatch.setattr(config, "TELEMETRY_LOG_PATH", tmp_path / "t.jsonl")
+    ep = Endpoint(base_url="http://t/v1", api_key="k", model="teacher", name="analyzer")
+    manager = PipelineManager(100, SimpleNamespace(analyzer=ep), None, seed=1, dry_run=True)
+    console = Console(width=160, height=height, force_terminal=False)
+    board = RunBoard(manager, to_add=100, existing=8, console=console, plain=plain)
+    board.plain = plain          # a captured console is not a terminal; the board under test owns one
+    return board, console
+
+
+def test_arrow_keys_scroll_a_window_over_the_samples(tmp_path, monkeypatch):
+    board, console = _board(tmp_path, monkeypatch)
+    monkeypatch.setattr(type(board.keys), "active", property(lambda self: True))   # pretend the key reader is running
+    for i in range(1, 21):
+        TRACKER.start(i)
+        TRACKER.stage("writer", f"drafting sample {i}")
+    try:
+        rows = board.visible_rows()
+        assert rows == 10 and board.follow
+
+        def shown():
+            with console.capture() as cap:
+                console.print(board.table())
+            return cap.get()
+
+        assert "drafting sample 1" in shown() and f"drafting sample {rows}" in shown() and f"drafting sample {rows + 1}" not in shown()
+        board.handle_key("down")
+        board.handle_key("down")
+        assert board.scroll == 2 and not board.follow
+        assert "drafting sample 1\n" not in shown() and "drafting sample 3" in shown() and f"drafting sample {rows + 2}" in shown()
+        board.handle_key("up")
+        assert board.scroll == 1
+        board.handle_key("pgdn")
+        assert board.scroll == 1 + rows - 1
+        board.handle_key("end")
+        assert board.scroll == 20 - rows and "drafting sample 20" in shown()
+        board.handle_key("down")                                   # already at the end: stays put
+        assert board.scroll == 20 - rows
+        board.handle_key("home")
+        assert board.scroll == 0 and board.follow and "drafting sample 1" in shown()
+        board.handle_key("pgup")
+        assert board.scroll == 0
+        with console.capture() as cap:
+            console.print(board.hint(rows, len(TRACKER)))
+        assert "showing 1 to 10 of 20" in cap.get() and "q finishes" in cap.get()
+    finally:
+        for i in range(1, 21):
+            TRACKER.finish(i)
+
+
+def test_q_asks_the_run_to_stop_after_the_samples_in_flight(tmp_path, monkeypatch):
+    board, console = _board(tmp_path, monkeypatch)
+    assert not board.stop_requested
+    with console.capture() as cap:
+        board.handle_key("quit")
+    assert board.stop_requested and "Finishing the samples in flight" in cap.get()
+    with console.capture() as cap:
+        board.handle_key("quit")                                   # pressed twice: said once
+    assert cap.get() == ""
+
+
+def test_typed_keys_reach_the_board(tmp_path, monkeypatch):
+    board, _ = _board(tmp_path, monkeypatch)
+    for key in ("down", "down", "quit"):
+        board.keys.push(key)
+    board.handle_keys()
+    assert board.keys.drain() == [] and board.stop_requested
+
+
+def test_key_sequences_are_decoded_per_platform():
+    from data_pipeline.keys import KeyReader, decode_posix, decode_windows
+
+    assert decode_windows("\xe0", "H") == "up" and decode_windows("\x00", "P") == "down"
+    assert decode_windows("\xe0", "Q") == "pgdn" and decode_windows("\xe0", "G") == "home"
+    assert decode_windows("q", "") == "quit" and decode_windows("z", "") is None
+    assert decode_posix("\x1b[A") == "up" and decode_posix("\x1b[B") == "down"
+    assert decode_posix("\x1b[6~") == "pgdn" and decode_posix("\x1b[H") == "home"
+    assert decode_posix("q") == "quit" and decode_posix("\x1b[Z") is None
+
+    reader = KeyReader()
+    assert not reader.available() or reader.available()            # no terminal under pytest, but it must not raise
+    assert reader.start() is False and not reader.active           # nothing to read from: stays off, board still works
+    reader.push("up")
+    assert reader.drain() == ["up"] and reader.drain() == []
+    reader.stop()
