@@ -79,6 +79,12 @@ python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the data
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
+Every run starts with a preflight: one tiny request to each model a run depends on, because a
+host can list a model and still not serve it (the answer is then a 404 on every call). A required
+role that fails stops the run before any sample starts; `--check` runs only the preflight;
+`--skip-preflight` skips it. During a run, a 404 or an authentication error stops the run at the
+first crash instead of the eighth, since every sample would fail the same way.
+
 `--concurrency` counts samples, not requests. Each server has its own cap,
 `MAX_CONCURRENT_PER_HOST` (2 by default, `HOST_LIMITS=host=1;other=2` per host), with
 `HOST_PACING_S` seconds between starts. A model that fills most of its card can batch about two

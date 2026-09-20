@@ -72,3 +72,68 @@ def test_profiles_differ_per_attempt_but_repeat_for_the_same_seed_and_offset(tmp
     assert a._profile_for(1) == b._profile_for(1) and a._profile_for(1) != a._profile_for(2)
     b.start_offset = 100
     assert a._profile_for(1) != b._profile_for(1)
+
+
+def test_a_missing_model_stops_the_run_after_one_crash(tmp_path, monkeypatch):
+    from data_pipeline.agents.llm_client import LLMCallError
+    from data_pipeline.run import fatal_reason
+
+    ep = Endpoint(base_url="https://api.example.com/v1", api_key="k", model="Qwen/Qwen3-30B", name="writer")
+    gone = LLMCallError("404 from Qwen/Qwen3-30B@api.example.com: model 'qwen3-30b' not found", retryable=False, endpoint=ep, status=404)
+    assert "does not serve this model" in fatal_reason(gone)
+    assert fatal_reason(LLMCallError("502 from x", retryable=True, endpoint=ep, status=502)) is None
+    assert fatal_reason(LLMCallError("400 from x: context too long", retryable=False, endpoint=ep, status=400)) is None
+    assert fatal_reason(RuntimeError("boom")) is None
+
+    manager = _manager(tmp_path, monkeypatch, FakeGraph(error=gone), target=5)
+    assert asyncio.run(manager.run_single_pipeline()) is None
+    assert manager.aborted and "api.example.com" in manager.aborted and manager.crash_count == 1
+
+
+def test_preflight_reports_every_role_and_fails_on_a_required_model(tmp_path, monkeypatch):
+    import random
+
+    from rich.console import Console
+
+    from data_pipeline import run as run_module
+    from data_pipeline.agents.llm_client import LLMCallError
+    from data_pipeline.endpoints import EndpointPool
+    from data_pipeline.graph import PipelineRuntime
+    from data_pipeline.lessons import LessonsStore
+    from data_pipeline.reputation import JudgeReputation
+
+    def ep(model, host):
+        return Endpoint(base_url=f"https://{host}/v1", api_key="k", model=model, name=model)
+
+    runtime = PipelineRuntime(
+        analyzer=ep("teacher", "endpoint"), editor=ep("teacher", "endpoint"), reviewer=ep("gpt-oss", "lmstudio"), writers=[ep("teacher", "endpoint")],
+        judge_pool=EndpointPool([ep("bonsai", "endpoint"), ep("gemini", "google")]), lessons=LessonsStore(tmp_path / "l.json"),
+        reputation=JudgeReputation(tmp_path / "r.json"), judge2=ep("oss-120b", "cerebras"), rng=random.Random(0),
+    )
+    answers = {"teacher": None, "gpt-oss": None, "bonsai": "404 model not found", "gemini": None, "oss-120b": "429 quota"}
+
+    async def fake_call(endpoint, messages, **kw):
+        error = answers[endpoint.model]
+        if error:
+            raise LLMCallError(error, retryable=False, endpoint=endpoint, status=404)
+        return "ok", {"tokens": 1}
+
+    monkeypatch.setattr(run_module, "acall_llm", fake_call)
+    console = Console(width=140, force_terminal=False)
+    with console.capture() as cap:
+        healthy = asyncio.run(run_module.preflight(runtime, console))
+    text = cap.get()
+    assert healthy                                                   # one judge answers, so the run may start
+    assert text.count("ok") >= 3 and "unavailable" in text and "404 model not found" in text and "429 quota" in text
+    assert text.count("teacher@endpoint") == 1                       # the same model on the same host is probed once
+
+    answers["teacher"] = "404 model 'qwen3-30b' not found"
+    with console.capture() as cap:
+        healthy = asyncio.run(run_module.preflight(runtime, console))
+    assert not healthy and "FAIL" in cap.get()
+
+    answers["teacher"] = None
+    answers["gemini"] = "503"
+    with console.capture() as cap:
+        healthy = asyncio.run(run_module.preflight(runtime, console))
+    assert not healthy and "no judge host answered" in cap.get()

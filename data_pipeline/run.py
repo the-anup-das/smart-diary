@@ -38,8 +38,9 @@ from rich.text import Text
 
 from data_pipeline import config
 from data_pipeline.agents.diversity_controller import generate_diversity_profile
+from data_pipeline.agents.llm_client import LLMCallError, acall_llm
 from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
-from data_pipeline.endpoints import EndpointPool
+from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
 from data_pipeline.lessons import LessonsStore
 from data_pipeline.reputation import JudgeReputation
@@ -226,7 +227,10 @@ class PipelineManager:
                     self.discard_count += 1
                     self.consecutive_crashes += 1
                     self.status_counts["CRASH"] = self.status_counts.get("CRASH", 0) + 1
-                    if self.consecutive_crashes >= config.MAX_CONSECUTIVE_CRASHES and not self.aborted:
+                    fatal = fatal_reason(e)
+                    if fatal and not self.aborted:
+                        self.aborted = fatal
+                    elif self.consecutive_crashes >= config.MAX_CONSECUTIVE_CRASHES and not self.aborted:
                         self.aborted = f"{self.consecutive_crashes} pipelines crashed in a row; the endpoint looks down or overloaded"
                 if board:
                     board.log(f"{tag} [bold red]x pipeline crash:[/bold red] {escape(state['crash_error'])}")
@@ -300,6 +304,67 @@ class PipelineManager:
                 self.raw_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.raw_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def fatal_reason(error: Exception) -> str | None:
+    """A reason to stop the whole run after one crash: the host rejects the model or the key, so every sample would fail the same way."""
+    if isinstance(error, LLMCallError) and not error.retryable and error.status in (401, 403, 404):
+        ep = error.endpoint
+        where = f"{ep.model} on {ep.host}" if ep else "an endpoint"
+        what = "does not serve this model" if error.status == 404 else "rejects the API key"
+        return f"{where}: the host {what} ({str(error)[:160]}). Check the model id and the key, then run the same command again"
+    return None
+
+
+async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
+    """One-token request to every model a run depends on. A host can list a model and still not serve it."""
+    roles: list[tuple[str, Endpoint, bool]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(role: str, ep: Endpoint | None, required: bool) -> None:
+        if ep is None or (ep.host, ep.model) in seen:
+            return
+        seen.add((ep.host, ep.model))
+        roles.append((role, ep, required))
+
+    for ep in runtime.writers:
+        add("writer", ep, True)
+    add("editor", runtime.editor, True)
+    add("reviewer", runtime.reviewer, True)
+    add("analyzer", runtime.analyzer, True)
+    for ep in runtime.judge_pool.endpoints:
+        add("judge", ep, False)
+    add("second judge", runtime.judge2, False)
+
+    async def probe(role: str, ep: Endpoint):
+        started = time.monotonic()
+        try:
+            await acall_llm(ep, [{"role": "user", "content": "Reply with the single word: ok"}], temperature=0.0, max_tokens=4, max_retries=1)
+            return role, ep, None, time.monotonic() - started
+        except LLMCallError as e:
+            return role, ep, str(e)[:140], time.monotonic() - started
+        except Exception as e:  # noqa: BLE001
+            return role, ep, f"{type(e).__name__}: {e}"[:140], time.monotonic() - started
+
+    results = await asyncio.gather(*(probe(role, ep) for role, ep, _ in roles))
+    table = Table(title="[bold]Preflight: does every model answer?[/bold]", border_style="bright_blue", box=box.SIMPLE_HEAD)
+    table.add_column("role", style="bold cyan")
+    table.add_column("model @ host")
+    table.add_column("result")
+    ok = True
+    judges_ok = 0
+    for (role, ep, required), (_, _, error, seconds) in zip(roles, results):
+        if error is None:
+            table.add_row(role, ep.label, f"[green]ok[/green] {seconds:.1f}s")
+            judges_ok += role == "judge"
+        else:
+            table.add_row(role, ep.label, f"[red]{'FAIL' if required else 'unavailable'}[/red] {escape(error)}")
+            ok = ok and not required
+    if not any(role == "judge" for role, _, _ in roles) or judges_ok == 0:
+        ok = False
+        table.add_row("judge", "-", "[red]FAIL[/red] no judge host answered")
+    console.print(table)
+    return ok
 
 
 def describe_profile(profile: dict) -> str:
@@ -541,6 +606,8 @@ async def amain() -> None:
     parser.add_argument("--no-judge2", action="store_true", help="disable the second-opinion judge")
     parser.add_argument("--dry-run", action="store_true", help="run one sample, print the record, write nothing")
     parser.add_argument("--plain", action="store_true", help="no live table, just printed lines, so the terminal scrolls and the output can be piped to a file")
+    parser.add_argument("--check", action="store_true", help="only run the preflight: one tiny request per model, then exit")
+    parser.add_argument("--skip-preflight", action="store_true", help="start without checking that every model answers")
     args = parser.parse_args()
 
     config.require_api_key()
@@ -561,6 +628,15 @@ async def amain() -> None:
         edge_case_rate=args.edge_rate, persona_rate=args.persona_rate, dry_run=args.dry_run,
     )
     _print_banner(args, manager, runtime, concurrency)
+
+    if args.check or not args.skip_preflight:
+        healthy = await preflight(runtime, console)
+        if args.check:
+            console.print("[bold green]Every required model answers.[/bold green]" if healthy else "[bold red]A required model does not answer; fix the endpoint or the env before running.[/bold red]")
+            raise SystemExit(0 if healthy else 1)
+        if not healthy:
+            console.print("[bold red]Not starting: a required model does not answer. Fix the endpoint or the env, or pass --skip-preflight.[/bold red]")
+            raise SystemExit(1)
 
     if args.dry_run:
         with RunBoard(manager, to_add=1, existing=existing, console=console, plain=args.plain) as board:
