@@ -40,17 +40,33 @@ class KeyReader:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._restore = None
+        self.reason: str | None = None      # why key reading is off, when it is
 
     @property
     def active(self) -> bool:
         return self._thread is not None
 
-    def available(self) -> bool:
-        """True when this process can read keys: a real terminal on the input side."""
+    def unavailable_reason(self) -> str | None:
+        """None when keys can be read, otherwise why they cannot."""
+        if sys.platform == "win32":
+            # The console hands keys to the process through CONIN$, whatever stdin is bound to,
+            # so ask it rather than trusting isatty: a wrapper can redirect stdin and keys still work.
+            try:
+                import msvcrt
+
+                msvcrt.kbhit()
+                return None
+            except Exception as e:  # noqa: BLE001
+                return f"no console attached ({type(e).__name__})"
         try:
-            return bool(sys.stdin) and sys.stdin.isatty()
-        except (AttributeError, ValueError):
-            return False
+            if sys.stdin is None or not sys.stdin.isatty():
+                return "the input is not a terminal"
+        except (AttributeError, ValueError) as e:
+            return f"the input cannot be read ({type(e).__name__})"
+        return None
+
+    def available(self) -> bool:
+        return self.unavailable_reason() is None
 
     def push(self, key: str) -> None:
         self._queue.put(key)
@@ -64,7 +80,10 @@ class KeyReader:
                 return keys
 
     def start(self) -> bool:
-        if self._thread is not None or not self.available():
+        if self._thread is not None:
+            return False
+        self.reason = self.unavailable_reason()
+        if self.reason is not None:
             return False
         loop = self._windows_loop if sys.platform == "win32" else self._posix_loop
         try:
@@ -127,6 +146,34 @@ class KeyReader:
             key = decode_posix(sequence)
             if key:
                 self.push(key)
+
+
+def _demo() -> None:
+    """Check that this terminal hands keys to a running program. Press keys; q or Ctrl+C ends it."""
+    import time
+
+    reader = KeyReader()
+    if not reader.start():
+        print(f"Keys cannot be read here: {reader.reason}.")
+        print("The run board will not scroll in this terminal; use --plain instead, or start the run from a console window.")
+        return
+    print("Reading keys. Press the arrows, page up and page down, home, end. q ends this test.")
+    try:
+        while True:
+            for key in reader.drain():
+                print(f"  got: {key}")
+                if key == "quit":
+                    return
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        reader.stop()
+        print("done.")
+
+
+if __name__ == "__main__":
+    _demo()
 
 
 __all__ = ["KeyReader", "decode_posix", "decode_windows", "POSIX_CODES", "WINDOWS_CODES"]

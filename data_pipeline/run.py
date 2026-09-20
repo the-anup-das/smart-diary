@@ -481,7 +481,11 @@ class RunBoard:
     def __enter__(self) -> "RunBoard":
         TRACKER.note_listeners.append(self._on_note)
         if self.live is not None:
-            self.keys.start()
+            if not self.keys.start():
+                self.console.print(
+                    f"[dim]Keys are off ({self.keys.reason or 'no terminal'}), so the table cannot be scrolled. "
+                    f"Run in a console window, or use --plain for lines the terminal scrolls itself.[/dim]"
+                )
             self.live.start()
         return self
 
@@ -579,9 +583,11 @@ class RunBoard:
         return max(3, height - 10)
 
     def hint(self, shown: int, total: int) -> Text:
-        if self.plain or not self.keys.active:
+        if self.plain:
             return Text("")
         window = f"showing {self.scroll + 1} to {self.scroll + shown} of {total}" if total > shown else f"showing all {total}"
+        if not self.keys.active:
+            return Text.from_markup(f"[dim]{window}   keys are off, so this window cannot be moved[/dim]")
         state = " [yellow]stopping after these[/yellow]" if self.stop_requested else ""
         return Text.from_markup(f"[dim]{window}   up and down scroll, page up and page down jump, home follows the oldest, q finishes and stops[/dim]{state}")
 
