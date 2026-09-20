@@ -57,7 +57,17 @@ Judges are a list: `base_url|key|model[|extra_json]` entries separated by `;`, w
 `{"reasoning_effort": "low", "max_tokens": 800}`). Rotate writers by listing several models in
 `WRITER_MODELS`; rotate hosts for the judge, never the analyzer. Put the reviewer on a different
 model from the writer (`REVIEWER_BASE_URL`, `REVIEWER_API_KEY`, `REVIEWER_MODEL`, for example
-Gemma 4 in LM Studio) so no model approves its own prose.
+gpt-oss-20b or Gemma 4 in LM Studio) so no model approves its own prose.
+
+Reasoning is controlled from the pipeline, not in the model window. gpt-oss is sent
+`reasoning_effort: low` everywhere, and on local hosts also as a chat-template variable; local
+thinking models (Gemma 4, Qwen3, Nemotron, GLM, DeepSeek, Magistral, Ministral) are sent
+`chat_template_kwargs: {enable_thinking: false}`, which LM Studio and llama-server pass to the
+template. Without this a reviewer spends its 400-token budget thinking and returns no verdict.
+Override per role with `<ROLE>_EXTRA` (a JSON object of request parameters), for the LM Studio
+judge with `LMSTUDIO_EXTRA`, and per judge entry with the `|extra_json` part of the spec. A host
+that answers 400 to these parameters gets the request again without them, once, and is then
+remembered as not taking them.
 
 ## 1. Generate
 

@@ -12,6 +12,41 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 
+def is_local_host(base_url: str) -> bool:
+    """LM Studio, llama-server, a compose service: loopback, a private range, or a bare hostname."""
+    host = (urlparse(base_url).hostname or base_url).lower()
+    if host in ("localhost", "host.docker.internal") or host.startswith(("127.", "10.", "192.168.", "0.0.0.0")):
+        return True
+    if host.startswith("172.") and host.split(".")[1].isdigit() and 16 <= int(host.split(".")[1]) <= 31:
+        return True
+    return "." not in host
+
+
+# Model families that reason before answering. Sent by default so a reviewer or judge does not
+# spend its token budget thinking; an explicit extra (or <ROLE>_EXTRA) always wins.
+THINKING_SWITCH_FAMILIES = ("gemma-4", "gemma4", "qwen3", "nemotron", "glm-4", "deepseek", "magistral", "ministral", "phi-4-reasoning")
+
+
+def default_extras(model: str, base_url: str = "") -> dict:
+    """Request parameters a model family needs to behave in this pipeline.
+
+    gpt-oss takes `reasoning_effort` (OpenAI, Cerebras, and as a chat-template variable on
+    llama.cpp servers). Local thinking models get `enable_thinking: false` through
+    `chat_template_kwargs`, which LM Studio and llama-server pass to the chat template; remote
+    APIs are left alone because the parameter is server specific.
+    """
+    name = (model or "").lower()
+    local = is_local_host(base_url) if base_url else False
+    out: dict = {}
+    if "gpt-oss" in name:
+        out["reasoning_effort"] = "low"
+        if local:
+            out["chat_template_kwargs"] = {"reasoning_effort": "low"}
+    elif local and any(family in name for family in THINKING_SWITCH_FAMILIES):
+        out["chat_template_kwargs"] = {"enable_thinking": False}
+    return out
+
+
 @dataclass(frozen=True)
 class Endpoint:
     base_url: str
@@ -20,6 +55,10 @@ class Endpoint:
     name: str = ""
     extra: dict = field(default_factory=dict, compare=False, hash=False)  # request params sent only to this host
     rpm: int | None = None                                                  # client-side requests-per-minute cap
+
+    def __post_init__(self) -> None:
+        merged = {**default_extras(self.model, self.base_url), **(self.extra or {})}
+        object.__setattr__(self, "extra", merged)
 
     @property
     def host(self) -> str:

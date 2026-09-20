@@ -58,3 +58,34 @@ def test_rate_limiter_spaces_calls():
 
     elapsed = asyncio.run(run())
     assert elapsed >= 0.09
+
+
+def test_model_family_defaults_for_reasoning(monkeypatch):
+    from data_pipeline import config
+    from data_pipeline.endpoints import Endpoint, default_extras, is_local_host
+
+    assert is_local_host("http://127.0.0.1:1234/v1") and is_local_host("http://llm-server:8080/v1") and is_local_host("http://192.168.1.20:8080/v1")
+    assert not is_local_host("https://api.cerebras.ai/v1") and not is_local_host("https://api.eolarityinnovations.com/v1")
+
+    local_oss = Endpoint(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio", model="openai/gpt-oss-20b")
+    assert local_oss.extra == {"reasoning_effort": "low", "chat_template_kwargs": {"reasoning_effort": "low"}}
+    remote_oss = Endpoint(base_url="https://api.cerebras.ai/v1", api_key="k", model="gpt-oss-120b")
+    assert remote_oss.extra == {"reasoning_effort": "low"}
+    gemma_local = Endpoint(base_url="http://localhost:1234/v1", api_key="lm-studio", model="google/gemma-4-12b-qat")
+    assert gemma_local.extra == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert Endpoint(base_url="https://api.eolarityinnovations.com/v1", api_key="k", model="Qwen/Qwen3-30B-A3B-Instruct-2507").extra == {}
+    assert default_extras("Ternary-Bonsai-2-27B", "https://api.eolarityinnovations.com/v1") == {}
+
+    explicit = Endpoint(base_url="http://localhost:1234/v1", api_key="lm-studio", model="openai/gpt-oss-20b", extra={"reasoning_effort": "high"})
+    assert explicit.extra["reasoning_effort"] == "high" and explicit.extra["chat_template_kwargs"] == {"reasoning_effort": "low"}
+    spec = parse_endpoint('http://localhost:1234/v1|lm-studio|google/gemma-4-26b-a4b|{"chat_template_kwargs": {"enable_thinking": true}, "rpm": 30}')
+    assert spec.extra == {"chat_template_kwargs": {"enable_thinking": True}} and spec.rpm == 30
+
+    monkeypatch.setenv("REVIEWER_BASE_URL", "http://127.0.0.1:1234/v1")
+    monkeypatch.setenv("REVIEWER_API_KEY", "lm-studio")
+    monkeypatch.setenv("REVIEWER_EXTRA", '{"reasoning_effort": "medium"}')
+    reviewer = config.role_endpoint("reviewer", "openai/gpt-oss-20b")
+    assert reviewer.extra == {"reasoning_effort": "medium", "chat_template_kwargs": {"reasoning_effort": "low"}} and reviewer.host == "127.0.0.1:1234"
+    monkeypatch.setenv("REVIEWER_EXTRA", "[1, 2]")
+    with pytest.raises(SystemExit):
+        config.role_endpoint("reviewer", "openai/gpt-oss-20b")

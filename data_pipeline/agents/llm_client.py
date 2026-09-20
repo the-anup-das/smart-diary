@@ -11,6 +11,7 @@ Async calls to OpenAI-compatible endpoints.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import random
 import re
@@ -29,6 +30,36 @@ _clients: dict[tuple[str, str], AsyncOpenAI] = {}
 _json_schema_support: dict[str, bool] = {}
 
 RETRYABLE = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError, openai.InternalServerError)
+_extras_rejected: set[str] = set()          # hosts that answered 400 to the endpoint's extra parameters
+_create_params: dict[type, set[str] | None] = {}   # per client class: named parameters of chat.completions.create
+_REJECTED_HINTS = ("unrecognized", "unsupported", "unknown", "not permitted", "extra field", "not allowed", "invalid parameter", "unexpected")
+
+
+def _request_kwargs(client, params: dict) -> dict:
+    """Named parameters go to `create` directly; anything the SDK does not know goes in `extra_body`."""
+    create = client.chat.completions.create
+    key = type(client)
+    if key not in _create_params:
+        try:
+            signature = inspect.signature(create)
+        except (TypeError, ValueError):
+            _create_params[key] = None
+        else:
+            accepts_any = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+            _create_params[key] = None if accepts_any else set(signature.parameters)
+    known = _create_params[key]
+    if known is None:
+        return dict(params)
+    direct = {k: v for k, v in params.items() if k in known}
+    body = {k: v for k, v in params.items() if k not in known}
+    if body:
+        direct["extra_body"] = {**(direct.get("extra_body") or {}), **body}
+    return direct
+
+
+def _extras_rejected_error(e: Exception, extra: dict) -> bool:
+    text = str(e).lower()
+    return any(k.lower() in text for k in extra) or any(hint in text for hint in _REJECTED_HINTS)
 _RESPONSE_FORMAT_HINTS = ("response_format", "json_schema", "json_object", "structured", "not supported", "unsupported", "invalid")
 
 
@@ -85,11 +116,16 @@ async def acall_llm(
     for key, value in ep.extra.items():
         params.setdefault(key, value)
 
+    extras_sent = bool(ep.extra) and ep.host not in _extras_rejected
+    if not extras_sent:
+        for key in ep.extra:
+            params.pop(key, None)
+
     client = get_client(ep)
     last: LLMCallError | None = None
     for attempt in range(max_retries):
         try:
-            response = await client.chat.completions.create(**params)
+            response = await client.chat.completions.create(**_request_kwargs(client, params))
             config.CONCURRENCY_CONTROLLER.increase()
             content = (response.choices[0].message.content or "").strip() if response.choices else ""
             return content, _usage(response, ep)
@@ -101,6 +137,17 @@ async def acall_llm(
                 config.CONCURRENCY_CONTROLLER.decrease()  # a slow server needs fewer parallel requests, like a rate limit
             status = getattr(e, "status_code", None)
             last = LLMCallError(f"{type(e).__name__} from {ep.label}: {e}", retryable=True, endpoint=ep, status=status)
+        except openai.BadRequestError as e:
+            if extras_sent and _extras_rejected_error(e, ep.extra):
+                # The host does not take this model family's extra parameters (reasoning effort, thinking switch):
+                # send the request again without them and remember that for the host.
+                _extras_rejected.add(ep.host)
+                extras_sent = False
+                for key in ep.extra:
+                    params.pop(key, None)
+                TRACKER.note(f"{ep.host} rejected the extra parameters {sorted(ep.extra)}; retrying without them")
+                continue
+            raise LLMCallError(f"{e.status_code} from {ep.label}: {e.message}", retryable=False, endpoint=ep, status=e.status_code) from e
         except openai.APIStatusError as e:
             raise LLMCallError(f"{e.status_code} from {ep.label}: {e.message}", retryable=False, endpoint=ep, status=e.status_code) from e
         if attempt < max_retries - 1:
@@ -221,3 +268,5 @@ def reset_caches() -> None:
     """For tests."""
     _clients.clear()
     _json_schema_support.clear()
+    _extras_rejected.clear()
+    _create_params.clear()

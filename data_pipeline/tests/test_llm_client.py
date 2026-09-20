@@ -113,3 +113,44 @@ def test_analysis_schema_format_is_lean():
     fmt = llm_client.json_schema_format(FeedbackReportSchema)
     body = str(fmt["json_schema"]["schema"])
     assert fmt["json_schema"]["name"] == "FeedbackReportSchema" and "description" not in body and "additionalProperties" in body
+
+
+class StrictClient(FakeClient):
+    """A client whose create() names its parameters, like the OpenAI SDK: unknown ones must travel in extra_body."""
+
+    async def create(self, *, model, messages, temperature=None, max_tokens=None, response_format=None, reasoning_effort=None, extra_body=None):
+        return await super().create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens, response_format=response_format, reasoning_effort=reasoning_effort, extra_body=extra_body)
+
+
+def test_unknown_extras_travel_in_extra_body(monkeypatch):
+    from data_pipeline.endpoints import Endpoint
+
+    ep = Endpoint(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio", model="openai/gpt-oss-20b")
+    fake = _install(monkeypatch, StrictClient([_response("ok")]))
+    content, _ = asyncio.run(llm_client.acall_llm(ep, [{"role": "user", "content": "hi"}], max_tokens=50))
+    assert content == "ok"
+    call = fake.calls[0]
+    assert call["reasoning_effort"] == "low" and call["extra_body"] == {"chat_template_kwargs": {"reasoning_effort": "low"}} and call["max_tokens"] == 50
+
+
+def test_host_that_rejects_extras_is_retried_without_them_and_remembered(monkeypatch):
+    from data_pipeline.endpoints import Endpoint
+
+    ep = Endpoint(base_url="http://localhost:1234/v1", api_key="lm-studio", model="google/gemma-4-12b-qat")
+    rejected = _http_error(openai.BadRequestError, 400, "Unrecognized request argument supplied: chat_template_kwargs")
+    fake = _install(monkeypatch, FakeClient([rejected, _response("ok"), _response("again")]))
+    content, _ = asyncio.run(llm_client.acall_llm(ep, [{"role": "user", "content": "hi"}]))
+    assert content == "ok"
+    assert "chat_template_kwargs" in fake.calls[0] and "chat_template_kwargs" not in fake.calls[1]
+    asyncio.run(llm_client.acall_llm(ep, [{"role": "user", "content": "hi"}]))
+    assert "chat_template_kwargs" not in fake.calls[2] and len(fake.calls) == 3   # remembered: no extras, no extra round trip
+
+
+def test_other_bad_requests_still_fail_fast(monkeypatch):
+    from data_pipeline.endpoints import Endpoint
+
+    ep = Endpoint(base_url="http://localhost:1234/v1", api_key="lm-studio", model="openai/gpt-oss-20b")
+    fake = _install(monkeypatch, FakeClient([_http_error(openai.BadRequestError, 400, "context length exceeded")]))
+    with pytest.raises(llm_client.LLMCallError) as info:
+        asyncio.run(llm_client.acall_llm(ep, [{"role": "user", "content": "hi"}]))
+    assert not info.value.retryable and len(fake.calls) == 1
