@@ -205,3 +205,17 @@ def test_host_model_modes_from_env():
     with pytest.raises(SystemExit):
         config._parse_host_modes("a.example=sometimes")
     assert config.host_model_mode("unknown.example") == "mixed"
+
+
+def test_a_model_may_have_its_own_cap(monkeypatch):
+    from data_pipeline import config
+
+    parsed = config._parse_host_limits("api.example.com=2;api.example.com/Ternary-27B=4;127.0.0.1:1234=1")
+    assert parsed == {"api.example.com": 2, "api.example.com/Ternary-27B": 4, "127.0.0.1:1234": 1}
+    monkeypatch.setattr(config, "HOST_LIMITS", parsed)
+    monkeypatch.setattr(config, "MAX_CONCURRENT_PER_HOST", 2)
+    assert config.host_limit("api.example.com", "Ternary-27B") == 4      # the model's own cap
+    assert config.host_limit("api.example.com", "Qwen/Qwen3-30B") == 2   # falls back to the host's
+    assert config.host_limit("api.example.com") == 2 and config.host_limit("other.example", "any") == 2
+    with pytest.raises(SystemExit):
+        config._parse_host_limits("api.example.com/model=lots")

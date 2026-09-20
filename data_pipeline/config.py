@@ -167,8 +167,9 @@ REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 180.0)   # a 30B model writing a
 
 # How many requests one server may be generating at once. A 30B model that fills most of a card
 # batches two generations well; more makes it shift context and every request slows down. Raise
-# it only for a server with spare memory. HOST_LIMITS overrides it per host:
-#   HOST_LIMITS=api.example.com=2;127.0.0.1:1234=1
+# it only for a server with spare memory. HOST_LIMITS overrides it per host, and per model where
+# a gateway fronts several of them on different hardware:
+#   HOST_LIMITS=api.example.com=2;api.example.com/Small-Model=6;127.0.0.1:1234=1
 MAX_CONCURRENT_PER_HOST = _int("MAX_CONCURRENT_PER_HOST", 2)
 HOST_PACING_S = _float("HOST_PACING_S", 0.5)             # pause between starts, so the server can free the last request's cache
 _HOST_LIMITS_SPEC = os.getenv("HOST_LIMITS", "")
@@ -177,10 +178,10 @@ _HOST_LIMITS_SPEC = os.getenv("HOST_LIMITS", "")
 def _parse_host_limits(spec: str) -> dict[str, int]:
     limits: dict[str, int] = {}
     for part in (p.strip() for p in spec.split(";") if p.strip()):
-        host, _, value = part.partition("=")
-        if not host.strip() or not value.strip().isdigit():
-            raise SystemExit(f"HOST_LIMITS must look like host=2;other:1234=1, got {part!r}")
-        limits[host.strip()] = max(1, int(value))
+        key, _, value = part.rpartition("=")
+        if not key.strip() or not value.strip().isdigit():
+            raise SystemExit(f"HOST_LIMITS must look like host=2;host/model-id=4;other:1234=1, got {part!r}")
+        limits[key.strip()] = max(1, int(value))
     return limits
 
 
@@ -210,7 +211,10 @@ def _parse_host_modes(spec: str) -> dict[str, str]:
 HOST_MODEL_MODES = _parse_host_modes(os.getenv("HOST_MODELS", ""))
 
 
-def host_limit(host: str) -> int:
+def host_limit(host: str, model: str | None = None) -> int:
+    """The cap for this model on this host: `host/model` if it is set, else the host's, else the default."""
+    if model and f"{host}/{model}" in HOST_LIMITS:
+        return HOST_LIMITS[f"{host}/{model}"]
     return HOST_LIMITS.get(host, MAX_CONCURRENT_PER_HOST)
 
 

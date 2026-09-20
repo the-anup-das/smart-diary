@@ -616,12 +616,22 @@ class RunBoard:
 
 def _host_limits_line(runtime: PipelineRuntime) -> str:
     """The cap each server gets, so an overloaded endpoint is visible before the run starts."""
-    hosts: list[str] = []
-    for ep in [runtime.analyzer, runtime.editor, runtime.reviewer, *runtime.writers, *runtime.judge_pool.endpoints] + ([runtime.judge2] if runtime.judge2 else []):
-        if ep and ep.host not in hosts:
-            hosts.append(ep.host)
-    suffix = {"separate": " per model", "shared": " in total, one model at a time", "mixed": " in total"}
-    parts = [f"{host} {config.host_limit(host)} at a time{suffix[config.host_model_mode(host)]}" for host in hosts]
+    endpoints = [runtime.analyzer, runtime.editor, runtime.reviewer, *runtime.writers, *runtime.judge_pool.endpoints] + ([runtime.judge2] if runtime.judge2 else [])
+    parts: list[str] = []
+    seen: set[str] = set()
+    for ep in endpoints:
+        if ep is None:
+            continue
+        mode = config.host_model_mode(ep.host)
+        if mode == "separate":
+            key = f"{ep.host}#{ep.model}"
+            label = f"{ep.model} on {ep.host} {config.host_limit(ep.host, ep.model)} at a time"
+        else:
+            key = ep.host
+            label = f"{ep.host} {config.host_limit(ep.host)} at a time" + (" in total, one model at a time" if mode == "shared" else " in total")
+        if key not in seen:
+            seen.add(key)
+            parts.append(label)
     return ", ".join(parts) + (f", {config.HOST_PACING_S:g}s between starts" if config.HOST_PACING_S else "")
 
 

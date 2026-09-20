@@ -86,7 +86,8 @@ role that fails stops the run before any sample starts; `--check` runs only the 
 first crash instead of the eighth, since every sample would fail the same way.
 
 `--concurrency` counts samples, not requests. Each server has its own cap,
-`MAX_CONCURRENT_PER_HOST` (2 by default, `HOST_LIMITS=host=1;other=2` per host), with
+`MAX_CONCURRENT_PER_HOST` (2 by default, `HOST_LIMITS=host=1;host/model-id=4` per host or per
+model), with
 `HOST_PACING_S` seconds between starts. A model that fills most of its card can batch about two
 generations; asking for more makes the server shift context between them and every request slows
 down at once. So keep the cap at 2 for a single-GPU endpoint and let `--concurrency` be higher:

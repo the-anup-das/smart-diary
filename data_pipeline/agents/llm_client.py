@@ -127,7 +127,7 @@ async def acall_llm(
     # Separate backends per model: count per model. One GPU behind them: count per host, and in
     # "shared" mode let only one model run at a time so the server never holds two of them.
     limiter_key = f"{ep.host}#{ep.model}" if mode == "separate" else ep.host
-    limiter = host_limiter(limiter_key, config.host_limit(ep.host), config.HOST_PACING_S, mode == "shared")
+    limiter = host_limiter(limiter_key, config.host_limit(ep.host, ep.model if mode == "separate" else None), config.HOST_PACING_S, mode == "shared")
     last: LLMCallError | None = None
     for attempt in range(max_retries):
         try:
