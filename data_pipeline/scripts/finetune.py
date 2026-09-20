@@ -1,7 +1,8 @@
 """
 QLoRA fine-tune of a 3B-class instruct model on the ShareGPT training file, with Unsloth.
 
-Runs on a Linux or WSL machine with an NVIDIA GPU (16 GB is enough for the 3B models at 4-bit).
+Runs on a Linux or WSL machine with an NVIDIA GPU (16 GB is enough for the 3B models at 4-bit;
+Gemma 4 E2B needs about 10 GB and the latest unsloth and transformers).
 Loss is computed on the assistant turn only, a held-out validation split drives early stopping,
 and the run writes a manifest that ties the adapter to the exact dataset and prompt version.
 
@@ -31,14 +32,42 @@ BASE_MODELS = {
     "qwen": "unsloth/Qwen2.5-3B-Instruct",
     "llama": "unsloth/Llama-3.2-3B-Instruct",
     "phi": "unsloth/Phi-3.5-mini-instruct",
+    "gemma4": "unsloth/gemma-4-E2B-it",   # 2.3B effective parameters, Apache 2.0, native system role, thinking switchable
 }
-CHAT_TEMPLATES = {"qwen": "qwen-2.5", "llama": "llama-3.1", "phi": "phi-3"}
+CHAT_TEMPLATES = {"qwen": "qwen-2.5", "llama": "llama-3.1", "phi": "phi-3", "gemma4": "gemma-4"}
 # The markers train_on_responses_only needs to mask everything but the assistant turn.
 RESPONSE_MARKERS = {
     "qwen": ("<|im_start|>user\n", "<|im_start|>assistant\n"),
     "llama": ("<|start_header_id|>user<|end_header_id|>\n\n", "<|start_header_id|>assistant<|end_header_id|>\n\n"),
     "phi": ("<|user|>\n", "<|assistant|>\n"),
+    "gemma4": ("<|turn>user\n", "<|turn>model\n"),
 }
+# Gemma 4 is multimodal and reasons before answering: it loads through FastModel with the vision
+# and audio layers frozen, and every training text is rendered with thinking off, the way the
+# student is served. Its tokenizer adds <bos> itself, so the rendered text must not carry one.
+MULTIMODAL = {"gemma4"}
+THINKING_SWITCH = {"gemma4"}
+
+
+def render_chat(tokenizer, conversation: list[dict], family: str, add_generation_prompt: bool = False) -> str:
+    kwargs = {"enable_thinking": False} if family in THINKING_SWITCH else {}
+    text = tokenizer.apply_chat_template(conversation, tokenize=False, add_generation_prompt=add_generation_prompt, **kwargs)
+    if family in MULTIMODAL and text.startswith("<bos>"):
+        text = text[len("<bos>"):]
+    return text
+
+
+def load_student(model_name: str, family: str, max_seq_length: int):
+    """The base or adapter for a family, 4-bit, ready for LoRA or inference."""
+    if family in MULTIMODAL:
+        from unsloth import FastModel
+
+        model, tokenizer = FastModel.from_pretrained(model_name=model_name, max_seq_length=max_seq_length, dtype=None, load_in_4bit=True, full_finetuning=False)
+        return FastModel, model, tokenizer
+    from unsloth import FastLanguageModel
+
+    model, tokenizer = FastLanguageModel.from_pretrained(model_name=model_name, max_seq_length=max_seq_length, dtype=None, load_in_4bit=True)
+    return FastLanguageModel, model, tokenizer
 
 
 def sha256_file(path: Path) -> str:
@@ -108,7 +137,6 @@ def main() -> None:
     from datasets import load_dataset
     from transformers import EarlyStoppingCallback
     from trl import SFTTrainer
-    from unsloth import FastLanguageModel
     from unsloth.chat_templates import get_chat_template, standardize_sharegpt, train_on_responses_only
 
     from data_pipeline.contracts import PROMPT_VERSION  # noqa: E402
@@ -119,17 +147,23 @@ def main() -> None:
     started = time.time()
     print(f"base {base} | data {args.data} | out {out_dir}")
 
-    model, tokenizer = FastLanguageModel.from_pretrained(model_name=base, max_seq_length=args.max_seq_length, dtype=None, load_in_4bit=True)
-    model = FastLanguageModel.get_peft_model(
-        model, r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout, bias="none",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        use_gradient_checkpointing="unsloth", random_state=args.seed,
-    )
+    loader, model, tokenizer = load_student(base, args.model, args.max_seq_length)
+    if args.model in MULTIMODAL:
+        model = loader.get_peft_model(
+            model, finetune_vision_layers=False, finetune_language_layers=True, finetune_attention_modules=True, finetune_mlp_modules=True,
+            r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout, bias="none", use_gradient_checkpointing="unsloth", random_state=args.seed,
+        )
+    else:
+        model = loader.get_peft_model(
+            model, r=args.r, lora_alpha=args.alpha, lora_dropout=args.dropout, bias="none",
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            use_gradient_checkpointing="unsloth", random_state=args.seed,
+        )
     tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATES[args.model])
 
     dataset = load_dataset("json", data_files=str(args.data), split="train")
     dataset = standardize_sharegpt(dataset)
-    dataset = dataset.map(lambda batch: {"text": [tokenizer.apply_chat_template(c, tokenize=False, add_generation_prompt=False) for c in batch["conversations"]]}, batched=True)
+    dataset = dataset.map(lambda batch: {"text": [render_chat(tokenizer, c, args.model) for c in batch["conversations"]]}, batched=True)
     dataset = dataset.shuffle(seed=args.seed)
     split = dataset.train_test_split(test_size=args.val_ratio, seed=args.seed)
     train_ds, val_ds = split["train"], split["test"]
@@ -185,6 +219,8 @@ def main() -> None:
     print(f"done in {manifest['wall_time_s']}s; manifest at {out_dir / 'manifest.json'}")
     if "gguf" in exports:
         print(f"serve it: ./scripts/serve_llama.sh {gguf_dir}/<file>.gguf   or   docker compose --profile local-ai up -d (LOCAL_LLM_GGUF=model_{args.model}_gguf/<file>.gguf)")
+    if args.model in THINKING_SWITCH:
+        print("this family reasons before answering unless told not to: the serve script and the compose profiles pass enable_thinking=false to the chat template")
 
 
 if __name__ == "__main__":

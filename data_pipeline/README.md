@@ -150,9 +150,22 @@ pip install -r data_pipeline/requirements-gpu.txt
 python data_pipeline/scripts/finetune.py --model qwen --epochs 2 --export adapter,merged,gguf --quant q4_k_m,q8_0
 ```
 
-QLoRA with Unsloth on `Qwen2.5-3B-Instruct` (`--model llama` or `phi` for the alternatives):
-loss on the assistant turn only, a 5% validation split with early stopping, cosine schedule,
-rank 32. Exports the adapter, a merged fp16 checkpoint for vLLM and GGUF files for llama.cpp, and
+QLoRA with Unsloth on `Qwen2.5-3B-Instruct` (`--model llama`, `phi` or `gemma4` for the
+alternatives): loss on the assistant turn only, a 5% validation split with early stopping, cosine
+schedule, rank 32.
+
+| Student | Base | Why it is a candidate |
+|---|---|---|
+| `qwen` | Qwen2.5-3B-Instruct | strongest of the four at schema-shaped JSON before any training; Apache 2.0 |
+| `llama` | Llama-3.2-3B-Instruct | the reference 3B; Llama licence |
+| `phi` | Phi-3.5-mini-instruct | 3.8B, MIT |
+| `gemma4` | Gemma 4 E2B-it | 2.3B effective parameters, so the fastest on a CPU; 128k context, native system role, Apache 2.0; multimodal weights with the vision and audio layers left frozen |
+
+Gemma 4 reasons before answering unless told not to. The training texts are rendered with
+thinking off, the evaluator renders its prompts the same way, and the serve script and the compose
+profiles pass `enable_thinking=false` to the chat template, so the student never spends tokens
+thinking in production. Its GGUF export needs the newest Unsloth and transformers (see
+`requirements-gpu.txt`), and a LoRA on the E2B fits in about 10 GB of VRAM. Exports the adapter, a merged fp16 checkpoint for vLLM and GGUF files for llama.cpp, and
 writes `output/lora_<model>/manifest.json` with the dataset hash, prompt version, hyperparameters,
 package versions and eval loss.
 

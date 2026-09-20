@@ -9,6 +9,9 @@ torch>=2.4,<2.8
 unsloth>=2025.3
 transformers>=4.51,<5
 trl>=0.20,<0.25
+# --model gemma4 (Gemma 4 E2B) needs the newest unsloth and a transformers that knows the
+# architecture; if the load fails with an unknown model type, run first:
+#   pip install -U unsloth transformers trl
 peft>=0.15
 bitsandbytes>=0.45
 accelerate>=1.0

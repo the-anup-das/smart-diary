@@ -50,4 +50,5 @@ exec llama-server \
   -c "$CTX" -np "$PARALLEL" \
   -ngl "$GPU_LAYERS" \
   --jinja \
+  --chat-template-kwargs '{"enable_thinking":false}' \
   --cache-reuse 256

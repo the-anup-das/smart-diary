@@ -105,21 +105,22 @@ async def run_endpoint(rows: list[dict], ep: Endpoint, concurrency: int, tempera
 
 def run_unsloth(rows: list[dict], family: str, adapter: str | None, use_base: bool, max_new_tokens: int = 2048) -> list[dict]:
     import torch
-    from unsloth import FastLanguageModel
     from unsloth.chat_templates import get_chat_template
 
     from data_pipeline.agents.llm_client import extract_json_object
-    from data_pipeline.scripts.finetune import BASE_MODELS, CHAT_TEMPLATES, OUTPUT_DIR
+    from data_pipeline.scripts.finetune import BASE_MODELS, CHAT_TEMPLATES, MULTIMODAL, OUTPUT_DIR, load_student, render_chat
 
     model_name = BASE_MODELS[family] if use_base else (adapter or str(OUTPUT_DIR / f"lora_{family}"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, tokenizer = FastLanguageModel.from_pretrained(model_name=model_name, max_seq_length=4096, dtype=None, load_in_4bit=True)
+    loader, model, tokenizer = load_student(model_name, family, 4096)
     tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATES[family])
-    FastLanguageModel.for_inference(model)
+    loader.for_inference(model)
     out = []
     for row in rows:
         messages = analysis_messages(row["entry"], row["persona"])
-        inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").to(device)
+        # Rendered the same way as training, thinking off for the families that have it, then tokenised with the model's own <bos>.
+        prompt = render_chat(tokenizer, messages, family, add_generation_prompt=True)
+        inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=family in MULTIMODAL).input_ids.to(device)   # the other templates already carry their own start token
         started = time.monotonic()
         with torch.no_grad():
             generated = model.generate(input_ids=inputs, max_new_tokens=max_new_tokens, do_sample=False, temperature=None, top_p=None, use_cache=True)
