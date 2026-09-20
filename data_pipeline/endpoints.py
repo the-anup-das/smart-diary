@@ -5,6 +5,7 @@ and a client-side rate limiter for hosts with tight per-minute caps.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -121,6 +122,70 @@ class RateLimiter:
                 await asyncio.sleep(self._next - now)
                 now = time.monotonic()
             self._next = max(now, self._next) + self.interval
+
+
+class HostLimiter:
+    """
+    How many requests a single server may be generating at once, plus a pause between starts.
+
+    A model that fills most of the card can batch only a couple of generations; asking for more
+    makes it shift context between them and throughput collapses, so every request slows down
+    instead of any finishing. The pause lets the server release the last request's cache before
+    the next one claims memory.
+    """
+
+    def __init__(self, limit: int, pacing_s: float = 0.0):
+        self.limit = max(1, int(limit))
+        self.pacing_s = max(0.0, float(pacing_s))
+        self.semaphore = asyncio.Semaphore(self.limit)
+        self.waiting = 0
+        self._next_start = 0.0
+        self._lock = asyncio.Lock()
+
+    @property
+    def in_flight(self) -> int:
+        return self.limit - self.semaphore._value  # noqa: SLF001
+
+    @contextlib.asynccontextmanager
+    async def slot(self):
+        """Hold a slot on the host for the length of one request."""
+        self.waiting += 1
+        try:
+            await self.semaphore.acquire()
+        finally:
+            self.waiting -= 1
+        try:
+            if self.pacing_s:
+                async with self._lock:
+                    now = time.monotonic()
+                    if self._next_start > now:
+                        await asyncio.sleep(self._next_start - now)
+                        now = time.monotonic()
+                    self._next_start = max(now, self._next_start) + self.pacing_s
+            yield self
+        finally:
+            self.semaphore.release()
+
+
+# One limiter per host and event loop: a semaphore belongs to the loop that awaits it.
+_host_limiters: dict[tuple[int, str], HostLimiter] = {}
+
+
+def host_limiter(host: str, limit: int, pacing_s: float = 0.0) -> HostLimiter:
+    try:
+        loop_key = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_key = 0
+    key = (loop_key, host)
+    limiter = _host_limiters.get(key)
+    if limiter is None or limiter.limit != max(1, int(limit)) or limiter.pacing_s != max(0.0, float(pacing_s)):
+        limiter = HostLimiter(limit, pacing_s)
+        _host_limiters[key] = limiter
+    return limiter
+
+
+def reset_host_limiters() -> None:
+    _host_limiters.clear()
 
 
 class EndpointPool:

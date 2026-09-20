@@ -493,6 +493,16 @@ class RunBoard:
         return Group(self.progress, self.counters(), self.tally(), self.table())
 
 
+def _host_limits_line(runtime: PipelineRuntime) -> str:
+    """The cap each server gets, so an overloaded endpoint is visible before the run starts."""
+    hosts: list[str] = []
+    for ep in [runtime.analyzer, runtime.editor, runtime.reviewer, *runtime.writers, *runtime.judge_pool.endpoints] + ([runtime.judge2] if runtime.judge2 else []):
+        if ep and ep.host not in hosts:
+            hosts.append(ep.host)
+    parts = [f"{host} {config.host_limit(host)} at a time" for host in hosts]
+    return ", ".join(parts) + (f", {config.HOST_PACING_S:g}s between starts" if config.HOST_PACING_S else "")
+
+
 def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
     judges = ", ".join(ep.label for ep in runtime.judge_pool.endpoints)
     reputation_line = ", ".join(f"{k}: {v['score']}" for k, v in runtime.reputation.snapshot().items()) or "no history yet"
@@ -512,6 +522,7 @@ def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, conc
         f"[bold cyan]Judge reputation:[/bold cyan] {reputation_line}",
         f"[bold cyan]Lessons:[/bold cyan] {'on' if runtime.lessons.enabled else 'off'} ({runtime.lessons.counts()})   "
         f"[bold cyan]Seed:[/bold cyan] {args.seed}   [bold cyan]Concurrency:[/bold cyan] {concurrency}{' (auto)' if args.concurrency == 'auto' else ''}",
+        f"[bold cyan]Per host:[/bold cyan] {_host_limits_line(runtime)}",
         f"[bold cyan]Prompt version:[/bold cyan] {PROMPT_VERSION}",
     ]
     console.print(Panel("\n".join(lines), title="[bold green]Distillation run[/bold green]", border_style="bright_blue"))

@@ -161,7 +161,32 @@ MAX_TOKENS_ENTRY = _int("MAX_TOKENS_ENTRY", 900)
 MAX_TOKENS_REVIEW = _int("MAX_TOKENS_REVIEW", 400)
 MAX_TOKENS_ANALYSIS = _int("MAX_TOKENS_ANALYSIS", 2048)
 MAX_TOKENS_JUDGE = _int("MAX_TOKENS_JUDGE", 800)
-REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 240.0)   # a 30B model writing a full analysis can take a while under load
+REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 180.0)   # a 30B model writing a full analysis can take a while under load
+
+# How many requests one server may be generating at once. A 30B model that fills most of a card
+# batches two generations well; more makes it shift context and every request slows down. Raise
+# it only for a server with spare memory. HOST_LIMITS overrides it per host:
+#   HOST_LIMITS=api.example.com=2;127.0.0.1:1234=1
+MAX_CONCURRENT_PER_HOST = _int("MAX_CONCURRENT_PER_HOST", 2)
+HOST_PACING_S = _float("HOST_PACING_S", 0.5)             # pause between starts, so the server can free the last request's cache
+_HOST_LIMITS_SPEC = os.getenv("HOST_LIMITS", "")
+
+
+def _parse_host_limits(spec: str) -> dict[str, int]:
+    limits: dict[str, int] = {}
+    for part in (p.strip() for p in spec.split(";") if p.strip()):
+        host, _, value = part.partition("=")
+        if not host.strip() or not value.strip().isdigit():
+            raise SystemExit(f"HOST_LIMITS must look like host=2;other:1234=1, got {part!r}")
+        limits[host.strip()] = max(1, int(value))
+    return limits
+
+
+HOST_LIMITS = _parse_host_limits(_HOST_LIMITS_SPEC)
+
+
+def host_limit(host: str) -> int:
+    return HOST_LIMITS.get(host, MAX_CONCURRENT_PER_HOST)
 ENDPOINT_COOLDOWN_S = _float("ENDPOINT_COOLDOWN_S", 90.0)
 MAX_CONSECUTIVE_CRASHES = _int("MAX_CONSECUTIVE_CRASHES", 8)   # stop the run instead of retrying a dead endpoint forever
 

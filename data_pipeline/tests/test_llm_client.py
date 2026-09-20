@@ -154,3 +154,41 @@ def test_other_bad_requests_still_fail_fast(monkeypatch):
     with pytest.raises(llm_client.LLMCallError) as info:
         asyncio.run(llm_client.acall_llm(ep, [{"role": "user", "content": "hi"}]))
     assert not info.value.retryable and len(fake.calls) == 1
+
+
+def test_calls_to_one_host_are_capped_while_other_hosts_proceed(monkeypatch, endpoint):
+    import time
+
+    from data_pipeline.endpoints import Endpoint
+
+    monkeypatch.setattr(config, "MAX_CONCURRENT_PER_HOST", 1)
+    monkeypatch.setattr(config, "HOST_PACING_S", 0.0)
+    other = Endpoint(base_url="http://other.local/v1", api_key="k", model="m", name="other")
+
+    class SlowClient(FakeClient):
+        def __init__(self):
+            super().__init__([])
+            self.active = 0
+            self.peak = 0
+
+        async def create(self, **params):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0.03)
+            self.active -= 1
+            return _response("ok")
+
+    clients = {"test.local": SlowClient(), "other.local": SlowClient()}
+    monkeypatch.setattr(llm_client, "get_client", lambda ep: clients[ep.host])
+
+    async def run():
+        real_sleep = asyncio.sleep
+        monkeypatch.setattr(llm_client.asyncio, "sleep", real_sleep)   # the autouse fixture stubbed it; the limiter needs real time
+        started = time.monotonic()
+        await asyncio.gather(*(llm_client.acall_llm(endpoint, [{"role": "user", "content": "hi"}]) for _ in range(3)),
+                             *(llm_client.acall_llm(other, [{"role": "user", "content": "hi"}]) for _ in range(3)))
+        return time.monotonic() - started
+
+    elapsed = asyncio.run(run())
+    assert clients["test.local"].peak == 1 and clients["other.local"].peak == 1     # one at a time per host
+    assert elapsed < 0.2                                                            # but the two hosts ran side by side

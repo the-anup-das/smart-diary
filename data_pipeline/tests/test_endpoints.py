@@ -89,3 +89,54 @@ def test_model_family_defaults_for_reasoning(monkeypatch):
     monkeypatch.setenv("REVIEWER_EXTRA", "[1, 2]")
     with pytest.raises(SystemExit):
         config.role_endpoint("reviewer", "openai/gpt-oss-20b")
+
+
+def test_host_limiter_caps_parallel_requests_and_paces_starts():
+    import asyncio
+    import time
+
+    from data_pipeline.endpoints import HostLimiter, host_limiter, reset_host_limiters
+
+    async def scenario():
+        limiter = HostLimiter(2, pacing_s=0.02)
+        peak = 0
+        active = 0
+        starts = []
+
+        async def request():
+            nonlocal peak, active
+            async with limiter.slot():
+                starts.append(time.monotonic())
+                active += 1
+                peak = max(peak, active)
+                await asyncio.sleep(0.15)     # longer than the pacing, so two requests overlap
+                active -= 1
+
+        await asyncio.gather(*(request() for _ in range(5)))
+        gaps = [b - a for a, b in zip(starts, starts[1:])]
+        return peak, gaps, limiter.waiting
+
+    peak, gaps, waiting = asyncio.run(scenario())
+    assert peak == 2 and waiting == 0 and all(g >= 0.015 for g in gaps)   # never more than two at once, starts spaced out
+
+    async def registry():
+        reset_host_limiters()
+        a = host_limiter("api.example.com", 2, 0.5)
+        assert host_limiter("api.example.com", 2, 0.5) is a          # same host, same settings: one limiter shared by all callers
+        assert host_limiter("api.example.com", 1, 0.5) is not a      # changed settings: a fresh one
+        assert host_limiter("127.0.0.1:1234", 2, 0.5) is not a
+        return True
+
+    assert asyncio.run(registry())
+
+
+def test_host_limits_from_env(monkeypatch):
+    from data_pipeline import config
+
+    assert config._parse_host_limits("api.example.com=2; 127.0.0.1:1234=1") == {"api.example.com": 2, "127.0.0.1:1234": 1}
+    assert config._parse_host_limits("") == {}
+    with pytest.raises(SystemExit):
+        config._parse_host_limits("api.example.com=two")
+    monkeypatch.setattr(config, "HOST_LIMITS", {"127.0.0.1:1234": 1})
+    monkeypatch.setattr(config, "MAX_CONCURRENT_PER_HOST", 2)
+    assert config.host_limit("127.0.0.1:1234") == 1 and config.host_limit("api.example.com") == 2

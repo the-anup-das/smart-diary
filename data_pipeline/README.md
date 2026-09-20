@@ -79,6 +79,14 @@ python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the data
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
+`--concurrency` counts samples, not requests. Each server has its own cap,
+`MAX_CONCURRENT_PER_HOST` (2 by default, `HOST_LIMITS=host=1;other=2` per host), with
+`HOST_PACING_S` seconds between starts. A model that fills most of its card can batch about two
+generations; asking for more makes the server shift context between them and every request slows
+down at once. So keep the cap at 2 for a single-GPU endpoint and let `--concurrency` be higher:
+samples queue for the busy host and keep working on the others. The banner prints the cap per
+host, and a sample that waits more than a second for a slot says so on the board.
+
 `--plain` turns the live table off and prints only the lines, which is what you want when you
 need to scroll back through the history or pipe the run to a file; a status line then reports
 where every sample is every 30 seconds (`BOARD_HEARTBEAT_S`). The live board repaints in place,

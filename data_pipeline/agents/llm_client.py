@@ -15,6 +15,7 @@ import inspect
 import json
 import random
 import re
+import time
 from dataclasses import dataclass, field
 
 import json_repair
@@ -23,7 +24,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
 from data_pipeline import config
-from data_pipeline.endpoints import Endpoint
+from data_pipeline.endpoints import Endpoint, host_limiter, reset_host_limiters
 from data_pipeline.status import TRACKER
 
 _clients: dict[tuple[str, str], AsyncOpenAI] = {}
@@ -122,10 +123,16 @@ async def acall_llm(
             params.pop(key, None)
 
     client = get_client(ep)
+    limiter = host_limiter(ep.host, config.host_limit(ep.host), config.HOST_PACING_S)
     last: LLMCallError | None = None
     for attempt in range(max_retries):
         try:
-            response = await client.chat.completions.create(**_request_kwargs(client, params))
+            queued = limiter.waiting
+            started = time.monotonic()
+            async with limiter.slot():
+                if queued and time.monotonic() - started > 1.0:
+                    TRACKER.note(f"waited {time.monotonic() - started:.0f}s for a free slot on {ep.host} ({limiter.limit} at a time, {queued} queued)")
+                response = await client.chat.completions.create(**_request_kwargs(client, params))
             config.CONCURRENCY_CONTROLLER.increase()
             content = (response.choices[0].message.content or "").strip() if response.choices else ""
             return content, _usage(response, ep)
@@ -270,3 +277,4 @@ def reset_caches() -> None:
     _json_schema_support.clear()
     _extras_rejected.clear()
     _create_params.clear()
+    reset_host_limiters()
