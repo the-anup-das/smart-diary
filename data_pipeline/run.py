@@ -7,7 +7,11 @@ telemetry rows with a fixed set of keys, and keeps the lessons store that steers
 Splits are built afterwards by scripts/build_splits.py.
 
     python -m data_pipeline.run --count 5 --dry-run
-    python -m data_pipeline.run --count 1500 --concurrency auto
+    python -m data_pipeline.run --count 200 --concurrency 3      # adds 200 approved samples to the dataset
+    python -m data_pipeline.run --total 1500 --concurrency 3     # keeps going until the dataset holds 1500
+
+Every run appends to output/dataset_raw.jsonl; nothing is overwritten. Split files are rebuilt
+from it by scripts/build_splits.py.
 """
 from __future__ import annotations
 
@@ -144,7 +148,7 @@ def telemetry_row(state: dict, final_status: str, reason: str | None) -> dict:
 class PipelineManager:
     def __init__(self, target_count: int, runtime: PipelineRuntime, graph, *, seed: int, force_edge_cases: bool = False,
                  edge_case_rate: float | None = None, persona_rate: float | None = None, dry_run: bool = False, raw_path: Path | None = None):
-        self.target_count = target_count
+        self.target_count = target_count   # approved samples to add in this run
         self.runtime = runtime
         self.graph = graph
         self.seed = seed
@@ -265,7 +269,7 @@ class PipelineManager:
 def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
     judges = ", ".join(ep.label for ep in runtime.judge_pool.endpoints)
     text = (
-        f"[bold cyan]Target samples:[/bold cyan] {args.count}   [bold cyan]Already in dataset:[/bold cyan] {manager.total_approved}\n"
+        f"[bold cyan]Adding this run:[/bold cyan] {manager.target_count}   [bold cyan]Already in dataset:[/bold cyan] {manager.total_approved}\n"
         f"[bold cyan]Writers:[/bold cyan] {', '.join(ep.label for ep in runtime.writers)}\n"
         f"[bold cyan]Analyzer (teacher):[/bold cyan] {runtime.analyzer.label}\n"
         f"[bold cyan]Judges:[/bold cyan] {judges}\n"
@@ -279,7 +283,8 @@ def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, conc
 
 async def amain() -> None:
     parser = argparse.ArgumentParser(description="Generate approved (entry, analysis) samples with the multi-agent pipeline")
-    parser.add_argument("--count", type=int, default=10, help="target total approved samples in dataset_raw.jsonl")
+    parser.add_argument("--count", type=int, default=10, help="approved samples to add in this run (the dataset keeps growing)")
+    parser.add_argument("--total", type=int, default=None, help="instead of --count: stop when dataset_raw.jsonl holds this many samples")
     parser.add_argument("--concurrency", type=str, default="5", help="parallel pipelines, an integer or 'auto'")
     parser.add_argument("--force-edge-cases", action="store_true", help="every sample gets an edge case")
     parser.add_argument("--seed", type=int, default=config.SEED)
@@ -301,8 +306,10 @@ async def amain() -> None:
     else:
         concurrency = max(1, int(args.concurrency))
 
+    existing = count_existing_samples()
+    to_add = max(0, args.total - existing) if args.total is not None else args.count
     manager = PipelineManager(
-        args.count, runtime, graph, seed=args.seed, force_edge_cases=args.force_edge_cases,
+        to_add, runtime, graph, seed=args.seed, force_edge_cases=args.force_edge_cases,
         edge_case_rate=args.edge_rate, persona_rate=args.persona_rate, dry_run=args.dry_run,
     )
     _print_banner(args, manager, runtime, concurrency)
@@ -319,8 +326,8 @@ async def amain() -> None:
         console.print("[bold green]Dry run complete; nothing was written.[/bold green]")
         return
 
-    if manager.total_approved >= args.count:
-        console.print("[bold green]Target already reached. Nothing to do.[/bold green]")
+    if to_add <= 0:
+        console.print(f"[bold green]The dataset already holds {existing} samples, at or above --total {args.total}. Nothing to do.[/bold green]")
         return
 
     config.CONCURRENCY_CONTROLLER.setup(concurrency)
@@ -330,11 +337,11 @@ async def amain() -> None:
         TimeElapsedColumn(), TimeRemainingColumn(), TextColumn("{task.fields[stats]}"),
         console=console, refresh_per_second=4,
     ) as progress:
-        task_id = progress.add_task("Distilling", total=args.count, completed=manager.total_approved, stats="")
+        task_id = progress.add_task(f"Adding {to_add} (dataset has {existing})", total=to_add, completed=0, stats="")
         pending: set[asyncio.Task] = set()
-        while manager.total_approved < args.count and not manager.aborted:
+        while manager.session_approved < to_add and not manager.aborted:
             limit = config.CONCURRENCY_CONTROLLER.current
-            while len(pending) < limit and manager.total_approved + len(pending) < args.count:
+            while len(pending) < limit and manager.session_approved + len(pending) < to_add:
                 pending.add(asyncio.create_task(manager.run_single_pipeline(progress, task_id)))
             if not pending:
                 break

@@ -56,8 +56,9 @@ Judges are a list: `base_url|key|model[|extra_json]` entries separated by `;`, w
 
 ```bash
 python -m data_pipeline.run --count 1 --dry-run          # one sample end to end, printed, nothing written
-python -m data_pipeline.run --count 5 --concurrency 2    # smoke run
-python -m data_pipeline.run --count 1500 --concurrency auto
+python -m data_pipeline.run --count 5 --concurrency 2    # smoke run: adds 5 approved samples
+python -m data_pipeline.run --count 200 --concurrency 3  # each run adds --count more; nothing is overwritten
+python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the dataset holds 1500
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
