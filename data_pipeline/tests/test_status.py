@@ -104,3 +104,41 @@ def test_manager_runs_without_a_board(tmp_path, monkeypatch):
 
     assert asyncio.run(manager.run_single_pipeline()) is not None
     assert len(TRACKER) == 0   # the row is removed when the sample finishes
+
+
+def test_board_fits_the_terminal_and_counts_every_sample(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from data_pipeline import config
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.run import RunBoard
+
+    monkeypatch.setattr(config, "TELEMETRY_LOG_PATH", tmp_path / "t.jsonl")
+    ep = Endpoint(base_url="http://t/v1", api_key="k", model="teacher", name="analyzer")
+    manager = PipelineManager(100, SimpleNamespace(analyzer=ep), None, seed=1, dry_run=True)
+    console = Console(width=160, height=20, force_terminal=False)
+    board = RunBoard(manager, to_add=100, existing=8, console=console)
+    for i in range(1, 16):
+        TRACKER.start(i)
+        TRACKER.stage("writer" if i > 3 else "judge", "drafting on api.example.com")
+    try:
+        assert board.visible_rows() == 11                       # 20 rows of terminal minus the bar, counters, tally and header
+        rendered = console.render_str  # noqa: F841
+        with console.capture() as cap:
+            console.print(board.table())
+        text = cap.get()
+        assert "and 4 more" in text and text.count("drafting on api.example.com") == 11
+        assert "\n 1 " in "\n" + text and "#15" not in text     # oldest first, the newest are the hidden ones
+        with console.capture() as cap:
+            console.print(board.tally())
+        tally = cap.get()
+        assert "judge 3" in tally and "writer 12" in tally      # every sample is counted even when its row is hidden
+        assert board.table(max_rows=50).row_count == 15
+    finally:
+        for i in range(1, 16):
+            TRACKER.finish(i)
+    with console.capture() as cap:
+        console.print(board.tally())
+    assert "Nothing in flight" in cap.get()

@@ -426,25 +426,45 @@ class RunBoard:
             + (", ".join(f"{k} {v}" for k, v in sorted(m.judge_hosts.items())) or "-")
         )
 
-    def table(self) -> Table:
+    def tally(self) -> Text:
+        """Every sample in flight counted by agent, so nothing is hidden when the table does not fit."""
+        counts: dict[str, int] = {}
+        for s in TRACKER.rows():
+            counts[s.stage] = counts.get(s.stage, 0) + 1
+        if not counts:
+            return Text.from_markup("[dim]Nothing in flight.[/dim]")
+        order = list(self.STAGE_STYLES) + [k for k in counts if k not in self.STAGE_STYLES]
+        parts = [f"[{self.STAGE_STYLES.get(k, 'white')}]{k} {counts[k]}[/{self.STAGE_STYLES.get(k, 'white')}]" for k in order if counts.get(k)]
+        return Text.from_markup("[bold]Now on:[/bold] " + "   ".join(parts))
+
+    def visible_rows(self) -> int:
+        """How many sample rows fit under the progress bar, counters, tally and table header."""
+        height = self.console.size.height or 24
+        return max(3, height - 9)
+
+    def table(self, max_rows: int | None = None) -> Table:
         table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, expand=False)
         table.add_column("#", justify="right", style="bold")
         table.add_column("agent")
-        table.add_column("doing", no_wrap=True, overflow="ellipsis", max_width=72)
+        table.add_column("doing", no_wrap=True, overflow="ellipsis", max_width=62)
         table.add_column("on this step", justify="right")
         table.add_column("sample total", justify="right")
-        table.add_column("note", style="dim", no_wrap=True, overflow="ellipsis", max_width=70)
+        table.add_column("note", style="dim", no_wrap=True, overflow="ellipsis", max_width=60)
         now = time.monotonic()
-        rows = TRACKER.rows()
-        for s in rows:
+        rows = sorted(TRACKER.rows(), key=lambda s: s.started)   # oldest first: the ones nearest a timeout
+        limit = self.visible_rows() if max_rows is None else max_rows
+        for s in rows[:limit]:
             style = self.STAGE_STYLES.get(s.stage, "white")
             table.add_row(str(s.attempt), f"[{style}]{s.stage}[/{style}]", escape(s.detail), fmt_seconds(s.stage_elapsed(now)), fmt_seconds(s.elapsed(now)), escape(s.note))
+        hidden = len(rows) - min(len(rows), limit)
+        if hidden:
+            table.add_row("", f"[dim]and {hidden} more, newest first; the tally above counts them all[/dim]", "", "", "", "")
         if not rows:
             table.add_row("-", "[dim]nothing in flight[/dim]", "", "", "", "")
         return table
 
     def __rich__(self):
-        return Group(self.progress, self.counters(), self.table())
+        return Group(self.progress, self.counters(), self.tally(), self.table())
 
 
 def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
