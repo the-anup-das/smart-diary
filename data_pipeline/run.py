@@ -1,311 +1,356 @@
-"""Runner entrypoint for the Multi-Agent Synthetic Data Distillation Pipeline (Async)."""
+"""
+Runner for the synthetic-data pipeline.
+
+Spawns sample pipelines up to the AIMD concurrency limit, writes every approved sample to
+output/dataset_raw.jsonl with its meta (profile, models, judge scores, prompt version), logs
+telemetry rows with a fixed set of keys, and keeps the lessons store that steers later samples.
+Splits are built afterwards by scripts/build_splits.py.
+
+    python -m data_pipeline.run --count 5 --dry-run
+    python -m data_pipeline.run --count 1500 --concurrency auto
+"""
+from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import random
-import os
 import datetime
+import hashlib
+import json
+import os
+import random
+import sys
+import uuid
+from pathlib import Path
+
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    BarColumn,
-    MofNCompleteColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from data_pipeline import config
-from data_pipeline.graph import build_pipeline_graph
 from data_pipeline.agents.diversity_controller import generate_diversity_profile
+from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
+from data_pipeline.endpoints import EndpointPool
+from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
+from data_pipeline.lessons import LessonsStore
 
-console = Console()
-
-ANALYZER_SYSTEM_PROMPT = """You are an empathetic AI psychologist and writing coach. Parse entries into strict JSON.
-Use CBT to reframe negatives. Life areas must sum to 1.0 weight."""
-
-
-def count_existing_samples() -> int:
-    """Calculates how many samples have already been successfully generated across train/test splits."""
-    count = 0
-    for path in [config.TRAIN_DATASET_PATH, config.TEST_DATASET_PATH]:
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                count += sum(1 for _ in f)
-    return count
+def _utf8_console() -> Console:
+    """Windows consoles default to a legacy code page; the entries and analyses carry real punctuation."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    return Console()
 
 
-def format_sharegpt_record(entry: str, thought_block: str, analysis_json: dict, custom_persona: str = None) -> dict:
-    system_content = ANALYZER_SYSTEM_PROMPT
-    if custom_persona:
-        system_content += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
-    
-    # Inject thought block directly into the JSON to support SGLang Guided JSON Decoding
-    analysis_json = {"thought_reasoning": thought_block, **analysis_json}
-    assistant_content = json.dumps(analysis_json, ensure_ascii=False)
-    
+console = _utf8_console()
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def count_existing_samples(path: Path | None = None) -> int:
+    path = path or config.RAW_DATASET_PATH
+    if not path.exists():
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
+
+
+def format_record(entry: str, analysis: dict, profile: dict, *, models: dict, judge_verdict: dict, judge2_verdict: dict | None = None, judge_retries: int = 0, editor_iterations: int = 0) -> dict:
+    """The raw dataset row. `analysis` must already validate against the contract."""
+    edge = profile.get("edge_case") or {}
+    scores = {k: judge_verdict.get(k) for k in ("grounding", "safety", "cbt_quality", "schema_semantics", "persona_adherence", "overall")}
     return {
-        "conversations": [
-            {"from": "system", "value": system_content},
-            {"from": "human", "value": entry},
-            {"from": "gpt", "value": assistant_content},
-        ]
+        "id": uuid.uuid4().hex,
+        "entry": entry,
+        "analysis": analysis,
+        "meta": {
+            "profile": {
+                "persona": profile["persona"], "emotion": profile["emotion"], "topic": profile["topic"],
+                "style": profile["style"], "length": profile["length"]["category"],
+            },
+            "edge_case": edge.get("type"),
+            "custom_persona": profile.get("custom_persona_prompt"),
+            "writer_model": models.get("writer"), "reviewer_model": models.get("reviewer"),
+            "teacher_model": models.get("teacher"), "judge_model": models.get("judge"), "judge_host": models.get("judge_host"),
+            "judge2_model": models.get("judge2"),
+            "prompt_version": PROMPT_VERSION,
+            "judge_scores": scores,
+            "judge2_scores": {k: judge2_verdict.get(k) for k in ("overall", "safety")} if judge2_verdict and "overall" in judge2_verdict else None,
+            "judge_retries": judge_retries,
+            "editor_iterations": editor_iterations,
+            "entry_sha256": hashlib.sha256(entry.strip().encode("utf-8")).hexdigest(),
+            "created_at": _now(),
+        },
+    }
+
+
+def build_runtime(*, lessons_enabled: bool = True, judge2_enabled: bool = True, seed: int | None = None) -> PipelineRuntime:
+    judges = config.judge_endpoints()
+    if not judges:
+        raise SystemExit("No judge endpoint is configured. Set JUDGE_ENDPOINTS, or LMSTUDIO_MODEL and a GOOGLE_API_KEY.")
+    judge2 = config.judge2_endpoint() if judge2_enabled else None
+    return PipelineRuntime(
+        analyzer=config.role_endpoint("analyzer", config.ANALYZER_MODEL),
+        editor=config.role_endpoint("editor", config.EDITOR_MODEL),
+        reviewer=config.role_endpoint("reviewer", config.REVIEWER_MODEL),
+        writers=[config.role_endpoint("writer", m) for m in config.WRITER_MODELS],
+        judge_pool=EndpointPool(judges, cooldown_s=config.ENDPOINT_COOLDOWN_S),
+        judge2=judge2,
+        judge2_pool=EndpointPool([judge2], cooldown_s=config.ENDPOINT_COOLDOWN_S) if judge2 else None,
+        judge2_enabled=judge2 is not None,
+        lessons=LessonsStore(config.LESSONS_PATH, max_items=config.LESSONS_MAX, enabled=lessons_enabled),
+        rng=random.Random((seed if seed is not None else config.SEED) + 7),
+        disagreements_path=config.JUDGE_DISAGREEMENTS_PATH,
+    )
+
+
+def initial_state(profile: dict, batch_index: int) -> dict:
+    return {
+        "profile": profile, "batch_index": batch_index, "entry": "", "editor_iteration": 0, "review": {},
+        "analysis_json": {}, "analysis_error": None, "schema_retry_count": 0,
+        "judge_verdict": {}, "judge_retry_count": 0, "needs_judge2": False, "judge2_verdict": {},
+        "final_status": "PENDING", "discard_reason": None, "total_tokens": 0, "total_cost": 0.0, "calls": 0,
+    }
+
+
+def telemetry_row(state: dict, final_status: str, reason: str | None) -> dict:
+    """Every row carries the same keys, so the dashboard never meets a missing column."""
+    verdict = state.get("judge_verdict") or {}
+    return {
+        "timestamp": _now(),
+        "status": final_status,
+        "editor_iterations": state.get("editor_iteration", 0),
+        "schema_retries": state.get("schema_retry_count", 0),
+        "judge_retries": state.get("judge_retry_count", 0),
+        "judge_overall": verdict.get("overall"),
+        "judge_safety": verdict.get("safety"),
+        "judge_model": state.get("judge_model"),
+        "judge_host": state.get("judge_host"),
+        "judge2_model": state.get("judge2_model"),
+        "writer_model": state.get("writer_model"),
+        "edge_case": (state.get("profile") or {}).get("edge_case", {}).get("type") if (state.get("profile") or {}).get("edge_case") else None,
+        "tokens": state.get("total_tokens", 0),
+        "calls": state.get("calls", 0),
+        "cost": state.get("total_cost", 0.0),
+        "discard_reason": reason if final_status != "PASSED" else None,
+        "error": state.get("crash_error"),
     }
 
 
 class PipelineManager:
-    def __init__(self, target_count, force_edge_cases):
+    def __init__(self, target_count: int, runtime: PipelineRuntime, graph, *, seed: int, force_edge_cases: bool = False,
+                 edge_case_rate: float | None = None, persona_rate: float | None = None, dry_run: bool = False, raw_path: Path | None = None):
         self.target_count = target_count
+        self.runtime = runtime
+        self.graph = graph
+        self.seed = seed
         self.force_edge_cases = force_edge_cases
-        self.graph = build_pipeline_graph()
-        
-        # Resume Capability
-        self.total_approved = count_existing_samples()
+        self.edge_case_rate = config.EDGE_CASE_RATE if edge_case_rate is None else edge_case_rate
+        self.persona_rate = config.PERSONA_PROMPT_RATE if persona_rate is None else persona_rate
+        self.dry_run = dry_run
+        self.raw_path = raw_path or config.RAW_DATASET_PATH
+        self.total_approved = count_existing_samples(self.raw_path)
+        self.start_offset = self.total_approved
         self.session_approved = 0
-        
         self.total_attempts = 0
         self.discard_count = 0
-        self.qe_score = 0
-        self.past_rejections = []
+        self.crash_count = 0
         self.total_tokens = 0
         self.total_cost = 0.0
-        
+        self.status_counts: dict[str, int] = {}
+        self.judge_hosts: dict[str, int] = {}
         self.lock = asyncio.Lock()
         self.file_lock = asyncio.Lock()
 
-    async def run_single_pipeline(self, progress, task_id):
-        profile = generate_diversity_profile(force_edge_case=self.force_edge_cases)
+    def _profile_for(self, attempt: int) -> dict:
+        rng = random.Random(self.seed * 1_000_003 + self.start_offset * 7919 + attempt)
+        return generate_diversity_profile(rng, force_edge_case=self.force_edge_cases, edge_case_rate=self.edge_case_rate, persona_rate=self.persona_rate)
 
+    async def run_single_pipeline(self, progress=None, task_id=None) -> dict | None:
         async with self.lock:
             self.total_attempts += 1
-            current_qe_score = self.qe_score
-            current_past_rejections = list(self.past_rejections)
-
-        current_state = {
-            "profile": profile,
-            "entry": "",
-            "editor_iteration": 0,
-            "review": {},
-            "thought_block": "",
-            "analysis_json": {},
-            "schema_retry_count": 0,
-            "schema_error": None,
-            "qe_report": {},
-            "qe_score": current_qe_score,
-            "past_rejections": current_past_rejections,
-            "judge_verdict": {},
-            "final_status": "PENDING",
-            "total_tokens": 0,
-            "total_cost": 0.0
-        }
+            attempt = self.total_attempts
+        profile = self._profile_for(attempt)
+        state = initial_state(profile, batch_index=(self.start_offset + attempt - 1) // config.WRITER_BATCH_SIZE)
 
         try:
-            async for output in self.graph.astream(current_state):
-                for node_name, node_output in output.items():
-                    current_state.update(node_output)
-        except Exception as e:
+            async for output in self.graph.astream(state, {"recursion_limit": 80}):
+                for _node, node_output in output.items():
+                    if isinstance(node_output, dict):
+                        state.update(node_output)
+        except Exception as e:  # noqa: BLE001
+            state["crash_error"] = f"{type(e).__name__}: {e}"[:300]
             async with self.lock:
+                self.crash_count += 1
                 self.discard_count += 1
-                progress.console.print(f"[bold red]✖ Pipeline Crash:[/bold red] {e}")
-            
-            # Log crash telemetry
-            async with self.file_lock:
-                with open(config.TELEMETRY_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps({
-                        "timestamp": datetime.datetime.utcnow().isoformat(),
-                        "status": "CRASH",
-                        "error": str(e),
-                    }) + "\n")
-            return
+                self.status_counts["CRASH"] = self.status_counts.get("CRASH", 0) + 1
+            if progress:
+                progress.console.print(f"[bold red]x Pipeline crash:[/bold red] {state['crash_error']}")
+            await self._write_outputs(state, None, "CRASH", state["crash_error"])
+            return None
 
+        final_status = state.get("final_status", "PENDING")
+        if final_status not in ("PASSED",) and not final_status.startswith("FAILED"):
+            final_status = "FAILED_UNKNOWN"
+        reason = state.get("discard_reason")
         record = None
-        reason = current_state.get("judge_verdict", {}).get("reason", "Failed quality check")
-        final_status = current_state.get("final_status")
-
-        async with self.lock:
-            self.qe_score = current_state.get("qe_score", self.qe_score)
-            self.past_rejections = current_state.get("past_rejections", self.past_rejections)
-            self.total_tokens += current_state.get("total_tokens", 0)
-            self.total_cost += current_state.get("total_cost", 0.0)
-
-            if final_status == "PASSED":
-                if self.total_approved >= self.target_count:
-                    return
-
-                record = format_sharegpt_record(
-                    entry=current_state["entry"],
-                    thought_block=current_state["thought_block"],
-                    analysis_json=current_state["analysis_json"],
-                    custom_persona=current_state["profile"].get("custom_persona_prompt"),
-                )
-                
-                self.total_approved += 1
-                self.session_approved += 1
-                
-                analysis = current_state["analysis_json"]
-                distress = analysis.get("distressFlag", False)
-                distress_badge = "[bold red]CRISIS[/bold red]" if distress else "[dim green]Safe[/dim green]"
-                mood = analysis.get("moodScore", 5)
-                sentiment = analysis.get("sentiment", "Neutral")
-                word_count = len(current_state["entry"].split())
-
-                progress.console.print(
-                    f"  [bold green]✔ Sample #{self.total_approved:02d}[/bold green] "
-                    f"| Mood: [bold yellow]{mood}/10[/bold yellow] ([cyan]{sentiment}[/cyan]) "
-                    f"| Words: [bold white]{word_count}[/bold white] "
-                    f"| Safety: {distress_badge} "
-                    f"| QE Score: [bold green]+{self.qe_score}[/bold green]"
-                )
-                progress.advance(task_id)
-            else:
-                self.discard_count += 1
-                progress.console.print(
-                    f"  [bold red]✖ Discarded[/bold red] "
-                    f"[dim]| Reason: {reason[:80]}...[/dim]"
-                )
-            
-            pass_rate = (self.session_approved / self.total_attempts) * 100
-            progress.update(
-                task_id, 
-                stats=f"[yellow]Pass: {pass_rate:.0f}%[/yellow] | [cyan]Cost: ${self.total_cost:.2f}[/cyan] | [magenta]Tokens: {self.total_tokens/1000:.1f}k[/magenta]"
+        if final_status == "PASSED":
+            record = format_record(
+                state["entry"], state["analysis_json"], profile,
+                models={
+                    "writer": state.get("writer_model"), "reviewer": state.get("reviewer_model"), "teacher": self.runtime.analyzer.model,
+                    "judge": state.get("judge_model"), "judge_host": state.get("judge_host"), "judge2": state.get("judge2_model") if state.get("judge2_verdict") else None,
+                },
+                judge_verdict=state.get("judge_verdict") or {}, judge2_verdict=state.get("judge2_verdict") or None,
+                judge_retries=state.get("judge_retry_count", 0), editor_iterations=state.get("editor_iteration", 0),
             )
 
-        # Write to disk OUTSIDE the main lock
+        async with self.lock:
+            self.total_tokens += state.get("total_tokens", 0)
+            self.total_cost += state.get("total_cost", 0.0)
+            self.status_counts[final_status] = self.status_counts.get(final_status, 0) + 1
+            if state.get("judge_host"):
+                self.judge_hosts[state["judge_host"]] = self.judge_hosts.get(state["judge_host"], 0) + 1
+            if record is not None:
+                # Every approved sample is written, even past the target: the spawn loop is what stops.
+                self.total_approved += 1
+                self.session_approved += 1
+                if progress:
+                    analysis = state["analysis_json"]
+                    badge = "[bold red]CRISIS[/bold red]" if analysis.get("distressFlag") else "[dim green]safe[/dim green]"
+                    verdict = state.get("judge_verdict") or {}
+                    progress.console.print(
+                        f"  [bold green]+ Sample #{self.total_approved:04d}[/bold green] | mood {analysis.get('moodScore')}/10 ({analysis.get('sentiment')}) "
+                        f"| {len(state['entry'].split())} words | {badge} | judge {verdict.get('overall')}/10 via {state.get('judge_host')}"
+                        f"{' | repaired' if state.get('judge_retry_count') else ''}"
+                    )
+                    progress.advance(task_id)
+            else:
+                self.discard_count += 1
+                if progress:
+                    progress.console.print(f"  [bold red]- {final_status}[/bold red] [dim]| {str(reason)[:110]}[/dim]")
+            if progress:
+                pass_rate = (self.session_approved / self.total_attempts) * 100
+                progress.update(task_id, stats=f"[yellow]pass {pass_rate:.0f}%[/yellow] | [magenta]{self.total_tokens / 1000:.0f}k tokens[/magenta] | [cyan]${self.total_cost:.2f}[/cyan]")
+
+        await self._write_outputs(state, record, final_status, reason)
+        return record
+
+    async def _write_outputs(self, state: dict, record: dict | None, final_status: str, reason: str | None) -> None:
+        if self.dry_run:
+            return
         async with self.file_lock:
-            # 1. Telemetry logging (for Dashboard)
-            telemetry_event = {
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "status": final_status,
-                "editor_iterations": current_state.get("editor_iteration", 0),
-                "schema_retries": current_state.get("schema_retry_count", 0),
-                "qe_score": self.qe_score,
-                "tokens": current_state.get("total_tokens", 0),
-                "cost": current_state.get("total_cost", 0.0),
-                "discard_reason": reason if final_status != "PASSED" else None
-            }
+            config.ensure_dirs()
             with open(config.TELEMETRY_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(json.dumps(telemetry_event) + "\n")
-                
-            # 2. Detailed rejection logging
+                f.write(json.dumps(telemetry_row(state, final_status, reason), ensure_ascii=False) + "\n")
             if final_status != "PASSED":
                 with open(config.REJECTIONS_LOG_PATH, "a", encoding="utf-8") as f:
-                    f.write(f"[{datetime.datetime.utcnow().isoformat()}] REJECTED\n")
-                    f.write(f"Reason: {reason}\n")
-                    f.write("-" * 40 + "\n")
-
-            # 3. Successful JSONL save
+                    f.write(f"[{_now()}] {final_status}\nReason: {reason}\n" + "-" * 40 + "\n")
             if record is not None:
-                is_test = random.random() < config.TEST_SPLIT_RATIO
-                target_file = config.TEST_DATASET_PATH if is_test else config.TRAIN_DATASET_PATH
-                with open(target_file, "a", encoding="utf-8") as f:
+                self.raw_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.raw_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-async def amain():
-    parser = argparse.ArgumentParser(description="Run Async Multi-Agent Synthetic Data Distillation Pipeline")
-    parser.add_argument("--count", type=int, default=10, help="Target total approved samples")
-    parser.add_argument("--force-edge-cases", action="store_true", help="Force 100% of samples to be edge cases")
-    parser.add_argument("--concurrency", type=str, default="5", help="Number of concurrent generation pipelines (int or 'auto')")
+def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
+    judges = ", ".join(ep.label for ep in runtime.judge_pool.endpoints)
+    text = (
+        f"[bold cyan]Target samples:[/bold cyan] {args.count}   [bold cyan]Already in dataset:[/bold cyan] {manager.total_approved}\n"
+        f"[bold cyan]Writers:[/bold cyan] {', '.join(ep.label for ep in runtime.writers)}\n"
+        f"[bold cyan]Analyzer (teacher):[/bold cyan] {runtime.analyzer.label}\n"
+        f"[bold cyan]Judges:[/bold cyan] {judges}\n"
+        f"[bold cyan]Second opinion:[/bold cyan] {runtime.judge2.label if runtime.judge2 else 'off'}\n"
+        f"[bold cyan]Lessons:[/bold cyan] {'on' if runtime.lessons.enabled else 'off'} ({runtime.lessons.counts()})   "
+        f"[bold cyan]Seed:[/bold cyan] {args.seed}   [bold cyan]Concurrency:[/bold cyan] {concurrency}{' (auto)' if args.concurrency == 'auto' else ''}\n"
+        f"[bold cyan]Prompt version:[/bold cyan] {PROMPT_VERSION}"
+    )
+    console.print(Panel(text, title="[bold green]Distillation run[/bold green]", border_style="bright_blue"))
+
+
+async def amain() -> None:
+    parser = argparse.ArgumentParser(description="Generate approved (entry, analysis) samples with the multi-agent pipeline")
+    parser.add_argument("--count", type=int, default=10, help="target total approved samples in dataset_raw.jsonl")
+    parser.add_argument("--concurrency", type=str, default="5", help="parallel pipelines, an integer or 'auto'")
+    parser.add_argument("--force-edge-cases", action="store_true", help="every sample gets an edge case")
+    parser.add_argument("--seed", type=int, default=config.SEED)
+    parser.add_argument("--edge-rate", type=float, default=None, help=f"share of samples with an edge case (default {config.EDGE_CASE_RATE})")
+    parser.add_argument("--persona-rate", type=float, default=None, help=f"share of samples with custom instructions (default {config.PERSONA_PROMPT_RATE})")
+    parser.add_argument("--no-lessons", action="store_true", help="disable the rejection-lessons loop (for A/B comparison)")
+    parser.add_argument("--no-judge2", action="store_true", help="disable the second-opinion judge")
+    parser.add_argument("--dry-run", action="store_true", help="run one sample, print the record, write nothing")
     args = parser.parse_args()
 
-    # Determine concurrency limit
+    config.require_api_key()
+    config.ensure_dirs()
+    runtime = build_runtime(lessons_enabled=not args.no_lessons, judge2_enabled=not args.no_judge2, seed=args.seed)
+    graph = build_pipeline_graph(runtime)
+
     if args.concurrency.lower() == "auto":
-        # Smart heuristic for 'auto' concurrency
-        is_local = "localhost" in config.LLM_BASE_URL or "127.0.0.1" in config.LLM_BASE_URL
-        if is_local:
-            # Local endpoints (vLLM, Ollama) can OOM with high concurrency. Keep it modest.
-            concurrency_limit = 4
-        else:
-            # Remote APIs (OpenRouter, Together). Scale with CPU but cap at 15 to avoid instant 429 Rate Limits.
-            concurrency_limit = min(15, (os.cpu_count() or 4) * 2)
+        local = any(h in config.LLM_BASE_URL for h in ("localhost", "127.0.0.1"))
+        concurrency = 4 if local else min(15, (os.cpu_count() or 4) * 2)
     else:
-        try:
-            concurrency_limit = int(args.concurrency)
-        except ValueError:
-            console.print("[bold red]Invalid concurrency value. Must be an integer or 'auto'.[/bold red]")
-            return
+        concurrency = max(1, int(args.concurrency))
 
-    manager = PipelineManager(args.count, args.force_edge_cases)
-
-    banner_text = (
-        f"[bold bright_white]Smart Diary - Async Distillation[/bold bright_white]\n\n"
-        f"[bold cyan]Target Total Samples:[/bold cyan] [bold green]{args.count}[/bold green]\n"
-        f"[bold cyan]Already Generated:[/bold cyan] [bold yellow]{manager.total_approved}[/bold yellow]\n"
-        f"[bold cyan]Initial Concurrency:[/bold cyan] [bold yellow]{concurrency_limit}x parallel pipelines[/bold yellow] { '(Auto AIMD)' if args.concurrency.lower() == 'auto' else '(Fixed Start)'}\n"
+    manager = PipelineManager(
+        args.count, runtime, graph, seed=args.seed, force_edge_cases=args.force_edge_cases,
+        edge_case_rate=args.edge_rate, persona_rate=args.persona_rate, dry_run=args.dry_run,
     )
-    console.print(Panel(banner_text, title="[bold green]Pipeline Config[/bold green]", border_style="bright_blue"))
+    _print_banner(args, manager, runtime, concurrency)
 
-    if manager.total_approved >= args.count:
-        console.print("[bold green]✔ Target count already reached in dataset. Exiting.[/bold green]")
+    if args.dry_run:
+        record = await manager.run_single_pipeline()
+        if record is None:
+            console.print("[bold red]The sample did not pass; see the reasons above.[/bold red]")
+            return
+        FeedbackReportSchema.model_validate(record["analysis"])
+        console.print(Panel(record["entry"], title="entry", border_style="green"))
+        console.print(Panel(json.dumps(record["analysis"], ensure_ascii=False, indent=1), title="analysis (validates against the contract)", border_style="green"))
+        console.print(Panel(json.dumps(record["meta"], ensure_ascii=False, indent=1), title="meta", border_style="cyan"))
+        console.print("[bold green]Dry run complete; nothing was written.[/bold green]")
         return
 
-    # Setup global AIMD controller
-    config.CONCURRENCY_CONTROLLER.setup(concurrency_limit)
+    if manager.total_approved >= args.count:
+        console.print("[bold green]Target already reached. Nothing to do.[/bold green]")
+        return
 
-    async def bound_pipeline(progress, task_id):
-        # We no longer use a semaphore block here because the spawn loop below acts as the concurrency limiter.
-        await manager.run_single_pipeline(progress, task_id)
-
+    config.CONCURRENCY_CONTROLLER.setup(concurrency)
     with Progress(
-        SpinnerColumn(spinner_name="dots", style="bright_cyan"),
-        TextColumn("[bold bright_white]{task.description}[/bold bright_white]"),
-        BarColumn(bar_width=30, complete_style="green", finished_style="bold green"),
-        MofNCompleteColumn(),
-        TextColumn("[bold green]{task.percentage:>3.0f}%[/bold green]"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-        TextColumn("{task.fields[stats]}"),
-        console=console,
-        refresh_per_second=5,
+        SpinnerColumn(spinner_name="dots", style="bright_cyan"), TextColumn("[bold]{task.description}[/bold]"),
+        BarColumn(bar_width=30), MofNCompleteColumn(), TextColumn("{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(), TimeRemainingColumn(), TextColumn("{task.fields[stats]}"),
+        console=console, refresh_per_second=4,
     ) as progress:
-        task_id = progress.add_task(
-            "Distilling", 
-            total=args.count, 
-            completed=manager.total_approved,
-            stats=f"[yellow]Pass: 100%[/yellow] | [cyan]Cost: $0.00[/cyan] | [magenta]Workers: {config.CONCURRENCY_CONTROLLER.current}[/magenta]"
-        )
-
-        pending = set()
+        task_id = progress.add_task("Distilling", total=args.count, completed=manager.total_approved, stats="")
+        pending: set[asyncio.Task] = set()
         while manager.total_approved < args.count:
-            # Poll dynamic concurrency limit continuously
-            current_limit = config.CONCURRENCY_CONTROLLER.current
-            
-            # Update the progress bar to show the dynamic worker limit
-            pass_rate = (manager.session_approved / manager.total_attempts * 100) if manager.total_attempts > 0 else 100
-            progress.update(
-                task_id, 
-                stats=f"[yellow]Pass: {pass_rate:.0f}%[/yellow] | [cyan]Cost: ${manager.total_cost:.2f}[/cyan] | [magenta]Workers: {current_limit}[/magenta]"
-            )
-
-            # Spawn workers up to the current dynamic limit
-            while len(pending) < current_limit and manager.total_approved < args.count:
-                task = asyncio.create_task(bound_pipeline(progress, task_id))
-                pending.add(task)
-
-            # Wait for at least one worker to finish, or a short timeout to allow the limit to adjust if it shrank
-            if pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)
-
-        # Wait for any still-running workers to finish cleanly
+            limit = config.CONCURRENCY_CONTROLLER.current
+            while len(pending) < limit and manager.total_approved + len(pending) < args.count:
+                pending.add(asyncio.create_task(manager.run_single_pipeline(progress, task_id)))
+            if not pending:
+                break
+            _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
-    # Print Summary Table
-    table = Table(title="[bold green]Session Summary[/bold green]", border_style="bright_blue")
+    table = Table(title="[bold green]Session summary[/bold green]", border_style="bright_blue")
     table.add_column("Metric", style="bold cyan")
-    table.add_column("Value", style="bold bright_white")
-    table.add_row("Total Approved (All Time)", f"[bold green]{manager.total_approved}[/bold green]")
-    table.add_row("Approved This Session", f"[bold green]{manager.session_approved}[/bold green]")
-    table.add_row("Discarded This Session", f"[bold red]{manager.discard_count}[/bold red]")
-    table.add_row("Session Pass Rate", f"[bold yellow]{(manager.session_approved / max(1, manager.total_attempts)):.1%}[/bold yellow]")
-    table.add_row("Tokens Used (Session)", f"[bold magenta]{manager.total_tokens:,}[/bold magenta]")
-    table.add_row("API Cost (Session)", f"[bold cyan]${manager.total_cost:.2f}[/bold cyan]")
-    table.add_row("Final QE Score", f"[bold cyan]{manager.qe_score}[/bold cyan]")
+    table.add_column("Value", style="bold")
+    table.add_row("Approved, all time", str(manager.total_approved))
+    table.add_row("Approved this session", str(manager.session_approved))
+    table.add_row("Discarded this session", str(manager.discard_count))
+    table.add_row("Outcomes", ", ".join(f"{k}: {v}" for k, v in sorted(manager.status_counts.items())))
+    table.add_row("Judge hosts", ", ".join(f"{k}: {v}" for k, v in sorted(manager.judge_hosts.items())) or "-")
+    table.add_row("Pass rate", f"{manager.session_approved / max(1, manager.total_attempts):.1%}")
+    table.add_row("Tokens", f"{manager.total_tokens:,}")
+    table.add_row("Cost", f"${manager.total_cost:.2f}")
+    table.add_row("Lessons stored", str(runtime.lessons.counts()))
     console.print("\n", table)
+    console.print("Next: [bold]python -m data_pipeline.scripts.build_splits[/bold] to dedup and split.")
+
 
 if __name__ == "__main__":
     asyncio.run(amain())

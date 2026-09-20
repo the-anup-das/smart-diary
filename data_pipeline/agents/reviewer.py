@@ -1,54 +1,34 @@
-"""Reviewer Agent (powered by Gemma)."""
+"""Reviewer: judges the entry text before any labelling. Fails closed on an unreadable reply."""
+from __future__ import annotations
 
-import re
-import json_repair
+from pydantic import BaseModel, Field
+
 from data_pipeline import config
-from data_pipeline.agents.llm_client import acall_llm
+from data_pipeline.agents.llm_client import acall_structured
+from data_pipeline.endpoints import Endpoint
 
-REVIEWER_SYSTEM_PROMPT = """You are an experienced creative editor and human psychology researcher.
-Your task is to review a simulated personal journal entry.
-Evaluate:
-1. Authenticity: Does it sound like a real person writing privately, or does it sound like an AI trying to sound like a diary? (Reject cliches like "Today was a day of contemplation" or overly neat conclusions).
-2. Emotional Depth: Is there sufficient emotional substance or specific situational detail for a psychologist/CBT coach to analyze?
-3. Natural Voice: Does the style match the requested persona and topic?
 
-Respond strictly in JSON format with two keys:
-{
-  "approved": true or false,
-  "critique": "Brief 1-2 sentence explanation of why it was approved or what specific aspects the editor needs to fix."
-}
-"""
+class ReviewVerdict(BaseModel):
+    approved: bool
+    critique: str = Field(description="One or two sentences: why it was approved, or exactly what the editor must fix.")
 
-async def review_journal_entry(entry: str, profile: dict) -> tuple[dict, dict]:
-    """Reviews the journal entry asynchronously and robustly parses the JSON."""
-    user_prompt = f"""Target Persona & Style:
-- Role: {profile['persona']['role']}
-- Emotion: {profile['emotion']}
-- Topic: {profile['topic']}
-- Expected Style: {profile['style']}
 
-Simulated Journal Entry:
-\"\"\"{entry}\"\"\"
+REVIEWER_SYSTEM_PROMPT = """You are an experienced editor and a researcher of how people actually write in private journals.
+Review a simulated journal entry.
+1. Authenticity: does it read like a real person writing privately, or like a model imitating a diary? Reject clichés ("Today was a day of contemplation"), tidy lessons at the end, and lists of feelings without events.
+2. Substance: is there enough specific situational detail for a coach to work with?
+3. Voice: does the style match the requested persona, emotion and topic, including the requested messiness or polish?
+Return only a JSON object with "approved" (true or false) and "critique"."""
 
-Provide your review as JSON:"""
 
-    raw_response, usage = await acall_llm(
-        model=config.REVIEWER_MODEL,
-        system_prompt=REVIEWER_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        temperature=0.2,
+async def review_journal_entry(entry: str, profile: dict, *, endpoint: Endpoint) -> tuple[dict, dict]:
+    user = (
+        "Target persona and style:\n"
+        f"- Role: {profile['persona']['role']}\n- Emotion: {profile['emotion']}\n- Topic: {profile['topic']}\n"
+        f"- Expected style: {profile['style']}\n\nSimulated journal entry:\n\"\"\"{entry}\"\"\"\n\nReview it as JSON."
     )
-    
-    # Resilient JSON parsing
-    try:
-        parsed = json_repair.loads(raw_response)
-        if not isinstance(parsed, dict):
-            raise ValueError("Parsed JSON is not a dictionary")
-        # Ensure keys exist
-        if "approved" not in parsed:
-            parsed["approved"] = True
-        return parsed, usage
-    except Exception:
-        # Fallback if parsing completely fails
-        is_approved = "approved\": true" in raw_response.lower()
-        return {"approved": is_approved, "critique": raw_response[:200]}, usage
+    messages = [{"role": "system", "content": REVIEWER_SYSTEM_PROMPT}, {"role": "user", "content": user}]
+    result = await acall_structured(endpoint, messages, ReviewVerdict, temperature=0.2, max_tokens=config.MAX_TOKENS_REVIEW)
+    if result.parsed is None:
+        return {"approved": False, "critique": f"reviewer output unreadable ({result.error}); tighten the entry's concrete detail"}, result.usage
+    return result.parsed.model_dump(), result.usage

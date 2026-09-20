@@ -1,73 +1,168 @@
-"""Configuration for the Multi-Agent Synthetic Data Distillation Pipeline."""
+"""
+Configuration for the synthetic-data distillation pipeline.
 
+Values come from the environment. The app's root `.env` is loaded first (it holds the Google
+keys the judge overflow uses), then `data_pipeline/.env`, which wins on conflicts. Nothing here
+touches the filesystem at import time; entry points call `ensure_dirs()`.
+
+Endpoint specs are `base_url|key|model[|extra_json]`, several separated by `;`. The key is
+either `env:NAME` (read from the environment; the entry is skipped when NAME is unset) or a
+literal such as `lm-studio`. `extra_json` holds request parameters sent only to that host,
+for example `{"reasoning_effort": "low", "max_tokens": 800}`, plus an optional `rpm` cap.
+"""
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load workspace root .env if present
-root_dir = Path(__file__).resolve().parent.parent
-load_dotenv(root_dir / ".env")
-load_dotenv(Path(__file__).resolve().parent / ".env")
+from data_pipeline.endpoints import Endpoint, parse_endpoint, parse_endpoint_list
 
-# Base paths
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "output"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+ROOT_DIR = BASE_DIR.parent
+load_dotenv(ROOT_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
-TRAIN_DATASET_PATH = OUTPUT_DIR / "training_dataset.jsonl"
-TEST_DATASET_PATH = OUTPUT_DIR / "test_dataset.jsonl"
+# ---------------------------------------------------------------- paths
+OUTPUT_DIR = BASE_DIR / "output"
 LOGS_DIR = BASE_DIR / "logs"
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DATASET_PATH = OUTPUT_DIR / "dataset_raw.jsonl"          # every approved sample, with meta
+TRAIN_DATASET_PATH = OUTPUT_DIR / "training_dataset.jsonl"   # written by scripts/build_splits.py
+TEST_DATASET_PATH = OUTPUT_DIR / "test_dataset.jsonl"
+SPLITS_MANIFEST_PATH = OUTPUT_DIR / "splits_manifest.json"
+LESSONS_PATH = OUTPUT_DIR / "lessons.json"
+JUDGE_DISAGREEMENTS_PATH = OUTPUT_DIR / "judge_disagreements.jsonl"
 TELEMETRY_LOG_PATH = LOGS_DIR / "telemetry.jsonl"
 REJECTIONS_LOG_PATH = LOGS_DIR / "rejections.log"
 
-# API Provider & Endpoint Configuration
-# Default is OpenRouter, but Together AI, Fireworks, or local vLLM can be used via env vars.
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("OPENROUTER_API_KEY", os.getenv("OPENAI_API_KEY", "")))
 
-# Model Assignments (Cross-family alternation)
-# Writer & Editor & QE: Qwen family
-WRITER_MODEL = os.getenv("WRITER_MODEL", "qwen/qwen3-30b-a3b-instruct")
-EDITOR_MODEL = os.getenv("EDITOR_MODEL", "qwen/qwen3-30b-a3b-instruct")
-QE_MODEL = os.getenv("QE_MODEL", "qwen/qwen3-30b-a3b-instruct")
+def ensure_dirs() -> None:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Reviewer & Analyzer (Teacher) & Judge: Gemma family
-REVIEWER_MODEL = os.getenv("REVIEWER_MODEL", "google/gemma-2-9b-it")
-ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", "google/gemma-2-9b-it")
-JUDGE_MODEL = os.getenv("JUDGE_MODEL", "google/gemma-2-9b-it")
 
-# Pipeline Controls
-MAX_EDITOR_ITERATIONS = 3
-MAX_SCHEMA_RETRY = 2
-DISCARD_RATE_THRESHOLD = 0.25  # Pause/warn if discard rate exceeds 25% over window
-TEST_SPLIT_RATIO = 0.10        # 10% test holdout, 90% training
+def _int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
 
-# Dynamic AIMD Concurrency Controller
+
+def _float(name: str, default: float) -> float:
+    return float(os.getenv(name, str(default)))
+
+
+# ---------------------------------------------------------------- default endpoint
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.eolarityinnovations.com/v1").rstrip("/")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
+
+
+def require_api_key() -> None:
+    if not LLM_API_KEY:
+        raise SystemExit(
+            "LLM_API_KEY is not set. Put it in data_pipeline/.env (never in the repo); "
+            "it is the key for LLM_BASE_URL, the endpoint that writes and labels entries."
+        )
+
+
+# ---------------------------------------------------------------- roles
+# The writer list is rotated per batch so entry style is not one model's fingerprint. The owner
+# currently runs a single writer; add more models separated by commas to rotate.
+WRITER_MODELS = [m.strip() for m in os.getenv("WRITER_MODELS", os.getenv("WRITER_MODEL", DEFAULT_MODEL)).split(",") if m.strip()]
+WRITER_BATCH_SIZE = _int("WRITER_BATCH_SIZE", 25)
+EDITOR_MODEL = os.getenv("EDITOR_MODEL", DEFAULT_MODEL)
+REVIEWER_MODEL = os.getenv("REVIEWER_MODEL", DEFAULT_MODEL)
+# One fixed teacher for the whole dataset, so the labels keep a single calibration.
+ANALYZER_MODEL = os.getenv("ANALYZER_MODEL", DEFAULT_MODEL)
+
+
+def role_endpoint(role: str, model: str | None = None) -> Endpoint:
+    """A single-endpoint role. `<ROLE>_BASE_URL`, `<ROLE>_API_KEY` and `<ROLE>_MODEL` override the defaults."""
+    prefix = role.upper()
+    return Endpoint(
+        base_url=os.getenv(f"{prefix}_BASE_URL", LLM_BASE_URL).rstrip("/"),
+        api_key=os.getenv(f"{prefix}_API_KEY", LLM_API_KEY) or "empty",
+        model=model or os.getenv(f"{prefix}_MODEL", DEFAULT_MODEL),
+        name=role,
+    )
+
+
+# ---------------------------------------------------------------- judges
+# First judge: the owner's LM Studio model (a different family from the analyzer), then the
+# Google AI Studio free tier as overflow, one entry per key. Entries whose key is unset are skipped.
+LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "google/gemma-4-26b-a4b")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_JUDGE_MODEL = os.getenv("GEMINI_JUDGE_MODEL", "gemini-3.6-flash")
+_GEMINI_EXTRA = '{"reasoning_effort": "low", "max_tokens": 800}'
+DEFAULT_JUDGE_ENDPOINTS = ";".join([
+    f"{LMSTUDIO_BASE_URL}|lm-studio|{LMSTUDIO_MODEL}",
+    f"{GEMINI_BASE_URL}|env:GOOGLE_API_KEY|{GEMINI_JUDGE_MODEL}|{_GEMINI_EXTRA}",
+    f"{GEMINI_BASE_URL}|env:GOOGLE_API_KEY_podcast|{GEMINI_JUDGE_MODEL}|{_GEMINI_EXTRA}",
+])
+JUDGE_ENDPOINTS_SPEC = os.getenv("JUDGE_ENDPOINTS", DEFAULT_JUDGE_ENDPOINTS)
+
+# Second opinion: Cerebras gpt-oss-120b, 5 requests a minute on the free tier.
+JUDGE2_ENDPOINT_SPEC = os.getenv("JUDGE2_ENDPOINT", 'https://api.cerebras.ai/v1|env:CEREBRAS_API_KEY|gpt-oss-120b|{"rpm": 5, "max_tokens": 800}')
+JUDGE2_SAMPLE_RATE = _float("JUDGE2_SAMPLE_RATE", 0.10)        # share of first-judge passes re-judged
+JUDGE2_FAIL_SAMPLE_RATE = _float("JUDGE2_FAIL_SAMPLE_RATE", 0.25)  # share of final fails re-judged, for disagreement logging
+
+JUDGE_THRESHOLD = _int("JUDGE_THRESHOLD", 7)      # overall score needed to pass
+JUDGE_SAFETY_MIN = _int("JUDGE_SAFETY_MIN", 8)    # safety score needed to pass
+
+
+def judge_endpoints() -> list[Endpoint]:
+    return parse_endpoint_list(JUDGE_ENDPOINTS_SPEC, name="judge")
+
+
+def judge2_endpoint() -> Endpoint | None:
+    return parse_endpoint(JUDGE2_ENDPOINT_SPEC, name="judge2") if JUDGE2_ENDPOINT_SPEC.strip() else None
+
+
+# ---------------------------------------------------------------- generation knobs
+SEED = _int("SEED", 3407)
+PERSONA_PROMPT_RATE = _float("PERSONA_PROMPT_RATE", 0.15)   # production personas are mostly empty
+EDGE_CASE_RATE = _float("EDGE_CASE_RATE", 0.30)
+MAX_EDITOR_ITERATIONS = _int("MAX_EDITOR_ITERATIONS", 3)
+MAX_SCHEMA_RETRY = _int("MAX_SCHEMA_RETRY", 2)
+MAX_JUDGE_RETRY = _int("MAX_JUDGE_RETRY", 1)                # repair once with the judge's critique before discarding
+LESSONS_MAX = _int("LESSONS_MAX", 8)
+TEST_SPLIT_RATIO = _float("TEST_SPLIT_RATIO", 0.10)
+
+MAX_TOKENS_ENTRY = _int("MAX_TOKENS_ENTRY", 900)
+MAX_TOKENS_REVIEW = _int("MAX_TOKENS_REVIEW", 400)
+MAX_TOKENS_ANALYSIS = _int("MAX_TOKENS_ANALYSIS", 2048)
+MAX_TOKENS_JUDGE = _int("MAX_TOKENS_JUDGE", 800)
+REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 120.0)
+ENDPOINT_COOLDOWN_S = _float("ENDPOINT_COOLDOWN_S", 90.0)
+
+# Cost per million tokens for the default endpoint; the owner's server is free, so 0 by default.
+LLM_PRICE_IN = _float("LLM_PRICE_IN", 0.0)
+LLM_PRICE_OUT = _float("LLM_PRICE_OUT", 0.0)
+
+
+# ---------------------------------------------------------------- AIMD concurrency
 class _ConcurrencyController:
+    """Additive increase on clean calls, multiplicative decrease on rate limits."""
+
     def __init__(self):
         self.current = 5
         self.max_allowed = 15
         self.min_allowed = 1
         self.success_streak = 0
-        
+
     def setup(self, initial: int):
         self.current = initial
         self.max_allowed = max(initial, 15)
         self.success_streak = 0
-        
+
     def decrease(self):
-        """Multiplicative decrease on 429 Rate Limit."""
-        new_limit = max(self.min_allowed, int(self.current * 0.5))
-        self.current = new_limit
+        self.current = max(self.min_allowed, int(self.current * 0.5))
         self.success_streak = 0
-        
+
     def increase(self):
-        """Additive increase on sustained success."""
         self.success_streak += 1
-        if self.success_streak >= 15:  # Require 15 consecutive clean API calls to bump concurrency
+        if self.success_streak >= 15:
             if self.current < self.max_allowed:
                 self.current += 1
             self.success_streak = 0
+
 
 CONCURRENCY_CONTROLLER = _ConcurrencyController()

@@ -34,6 +34,7 @@ TOPIC_VOCAB: tuple[str, ...] = (
 TOPIC_WEIGHT_TOLERANCE = 0.05
 MICRO_ACTIONS_REQUIRED = 3
 EMOTION_LABELS_MIN, EMOTION_LABELS_MAX = 1, 3
+GRAMMAR_FIXES_REQUIRED_BELOW = 5   # a low grammar score with no listed fix is an inconsistent label
 
 
 class GrammarFix(BaseModel):
@@ -176,6 +177,7 @@ def _field_guide() -> str:
         f"- energyAnalysis.ruminationLevel: one of {join(RUMINATION_LEVELS)}.\n"
         f"- energyAnalysis.microActions: exactly {MICRO_ACTIONS_REQUIRED} items, each with a unique id.\n"
         f"- emotionLabels: {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX} words.\n"
+        f"- grammarScore: 10 is flawless; a score below {GRAMMAR_FIXES_REQUIRED_BELOW} must come with grammarFixes listing the errors.\n"
         f"- stimulation.behaviours[].category: one of {join(STIMULATION_CATEGORIES)}; "
         f"timeOfDay: one of {join(TIMES_OF_DAY)}; stimulation.afterState: one of {join(AFTER_STATES)}.\n"
         f"- cognition.builders: any of {join(BUILDERS)}, only when the entry says it happened.\n"
@@ -233,6 +235,8 @@ def check_business_rules(report: FeedbackReportSchema) -> list[str]:
     n_emotions = len(report.emotionLabels)
     if not (EMOTION_LABELS_MIN <= n_emotions <= EMOTION_LABELS_MAX):
         problems.append(f"emotionLabels has {n_emotions} items; give {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX}")
+    if report.grammarScore < GRAMMAR_FIXES_REQUIRED_BELOW and not report.grammarFixes:
+        problems.append(f"grammarScore is {report.grammarScore} but grammarFixes is empty; list the errors or raise the score")
     stim = report.stimulation
     if not stim.behaviours and (stim.load != 0 or stim.afterState != "none"):
         problems.append("stimulation has no behaviours, so load must be 0 and afterState 'none'")
@@ -280,7 +284,7 @@ def analysis_json_schema(for_local: bool = False) -> dict:
 __all__ = [
     "PROMPT_VERSION", "PROMPT_SHA256", "PERSONA_HEADER", "TOPIC_VOCAB",
     "RUMINATION_LEVELS", "STIMULATION_CATEGORIES", "TIMES_OF_DAY", "AFTER_STATES", "BUILDERS",
-    "MICRO_ACTIONS_REQUIRED", "EMOTION_LABELS_MIN", "EMOTION_LABELS_MAX", "TOPIC_WEIGHT_TOLERANCE",
+    "MICRO_ACTIONS_REQUIRED", "EMOTION_LABELS_MIN", "EMOTION_LABELS_MAX", "TOPIC_WEIGHT_TOLERANCE", "GRAMMAR_FIXES_REQUIRED_BELOW",
     "GrammarFix", "CognitiveReframe", "TopicWeight", "EnergyMicroAction", "EnergyItem",
     "EnergyAnalysisSchema", "StimulationBehaviour", "StimulationSignalsSchema", "CognitionSignalsSchema",
     "FeedbackReportSchema",

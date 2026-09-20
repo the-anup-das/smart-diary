@@ -7,7 +7,7 @@ from ai_contracts import analysis as c
 
 # Pinned on purpose. If this fails you changed the prompt or the schema: bump PROMPT_VERSION,
 # update the hash here, and expect the analysis cache to refill.
-PINNED_PROMPT_SHA256 = "84d87c2775f05ee944ea51efc453b6fbe2c8b95fad0ee18cea2d7a1beb986cf1"
+PINNED_PROMPT_SHA256 = "c96a06e8015842beb17ac13a414388f9232b5f5279b8d40943aad10185ac3504"
 
 
 def _good_report() -> c.FeedbackReportSchema:
@@ -70,8 +70,9 @@ def test_business_rules_accept_a_consistent_report_and_name_each_problem():
     bad.emotionLabels = []
     bad.stimulation.load = 2
     bad.cognition.brainRotLoad = 1
+    bad.grammarScore = 2
     problems = "\n".join(c.check_business_rules(bad))
-    for needle in ("sum to 0.80", "gardening", "microActions has 2", "emotionLabels has 0", "load must be 0", "brainRotLoad must be 0"):
+    for needle in ("sum to 0.80", "gardening", "microActions has 2", "emotionLabels has 0", "load must be 0", "brainRotLoad must be 0", "grammarScore is 2"):
         assert needle in problems, needle
 
 
