@@ -69,6 +69,13 @@ python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the data
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
+While it runs, the terminal shows a board: the progress bar, counters (in flight, started,
+approved, discarded by reason, pass rate, tokens, judge hosts) and one row per sample in flight
+with the agent it is on, what that agent is doing and for how long. Every decision prints above
+the board as it happens: what the reviewer wanted changed, what the validator rejected, each
+judge's scores and where the sample went next, retries after a timeout, and the approved or
+discarded outcome. On PowerShell set `$env:PYTHONUTF8 = "1"` first so the punctuation renders.
+
 What happens per sample: a seeded diversity profile (persona, emotion, topic, style, length, an
 edge case for 30% of samples, a custom persona instruction for 15%); the writer drafts; the
 reviewer approves or the editor revises, three rounds at most; the analyzer labels the entry with

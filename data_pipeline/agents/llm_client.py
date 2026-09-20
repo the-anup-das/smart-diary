@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from data_pipeline import config
 from data_pipeline.endpoints import Endpoint
+from data_pipeline.status import TRACKER
 
 _clients: dict[tuple[str, str], AsyncOpenAI] = {}
 _json_schema_support: dict[str, bool] = {}
@@ -103,6 +104,7 @@ async def acall_llm(
         except openai.APIStatusError as e:
             raise LLMCallError(f"{e.status_code} from {ep.label}: {e.message}", retryable=False, endpoint=ep, status=e.status_code) from e
         if attempt < max_retries - 1:
+            TRACKER.note(f"retry {attempt + 2}/{max_retries} on {ep.host} after {str(last)[:90]}")
             await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
     assert last is not None
     raise last

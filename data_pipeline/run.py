@@ -23,13 +23,18 @@ import json
 import os
 import random
 import sys
+import time
 import uuid
 from pathlib import Path
 
-from rich.console import Console
+from rich import box
+from rich.console import Console, Group
+from rich.live import Live
+from rich.markup import escape
 from rich.panel import Panel
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
+from rich.text import Text
 
 from data_pipeline import config
 from data_pipeline.agents.diversity_controller import generate_diversity_profile
@@ -38,6 +43,8 @@ from data_pipeline.endpoints import EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
 from data_pipeline.lessons import LessonsStore
 from data_pipeline.reputation import JudgeReputation
+from data_pipeline.status import TRACKER, fmt_seconds
+from data_pipeline.status import TRACKER, fmt_seconds
 
 def _utf8_console() -> Console:
     """Windows consoles default to a legacy code page; the entries and analyses carry real punctuation."""
@@ -191,81 +198,93 @@ class PipelineManager:
         rng = random.Random(self.seed * 1_000_003 + self.start_offset * 7919 + attempt)
         return generate_diversity_profile(rng, force_edge_case=self.force_edge_cases, edge_case_rate=self.edge_case_rate, persona_rate=self.persona_rate)
 
-    async def run_single_pipeline(self, progress=None, task_id=None) -> dict | None:
+    async def run_single_pipeline(self, board: "RunBoard | None" = None) -> dict | None:
         async with self.lock:
             self.total_attempts += 1
             attempt = self.total_attempts
         profile = self._profile_for(attempt)
         state = initial_state(profile, batch_index=(self.start_offset + attempt - 1) // config.WRITER_BATCH_SIZE)
+        TRACKER.start(attempt)
+        tag = f"[dim]#{attempt}[/dim]"
+        if board:
+            board.log(f"{tag} new sample: {describe_profile(profile)}")
 
         try:
-            async for output in self.graph.astream(state, {"recursion_limit": 80}):
-                for _node, node_output in output.items():
-                    if isinstance(node_output, dict):
-                        state.update(node_output)
-        except Exception as e:  # noqa: BLE001
-            state["crash_error"] = f"{type(e).__name__}: {e}"[:300]
+            try:
+                async for output in self.graph.astream(state, {"recursion_limit": 80}):
+                    for node, node_output in output.items():
+                        if isinstance(node_output, dict):
+                            if board:
+                                event = stage_event(node, node_output, state)
+                                if event:
+                                    board.log(f"{tag} {event}")
+                            state.update(node_output)
+            except Exception as e:  # noqa: BLE001
+                state["crash_error"] = f"{type(e).__name__}: {e}"[:300]
+                async with self.lock:
+                    self.crash_count += 1
+                    self.discard_count += 1
+                    self.consecutive_crashes += 1
+                    self.status_counts["CRASH"] = self.status_counts.get("CRASH", 0) + 1
+                    if self.consecutive_crashes >= config.MAX_CONSECUTIVE_CRASHES and not self.aborted:
+                        self.aborted = f"{self.consecutive_crashes} pipelines crashed in a row; the endpoint looks down or overloaded"
+                if board:
+                    board.log(f"{tag} [bold red]x pipeline crash:[/bold red] {escape(state['crash_error'])}")
+                await self._write_outputs(state, None, "CRASH", state["crash_error"])
+                return None
+
+            final_status = state.get("final_status", "PENDING")
+            if final_status not in ("PASSED",) and not final_status.startswith("FAILED"):
+                final_status = "FAILED_UNKNOWN"
+            reason = state.get("discard_reason")
+            record = None
+            if final_status == "PASSED":
+                record = format_record(
+                    state["entry"], state["analysis_json"], profile,
+                    models={
+                        "writer": state.get("writer_model"), "reviewer": state.get("reviewer_model"), "teacher": self.runtime.analyzer.model,
+                        "judge": state.get("judge_model"), "judge_host": state.get("judge_host"), "judge2": state.get("judge2_model") if state.get("judge2_verdict") else None,
+                    },
+                    judge_verdict=state.get("judge_verdict") or {}, judge2_verdict=state.get("judge2_verdict") or None,
+                    judge_retries=state.get("judge_retry_count", 0), editor_iterations=state.get("editor_iteration", 0),
+                    entry_repairs=state.get("entry_repair_count", 0), judge2_passed=state.get("judge2_passed"),
+                )
+
             async with self.lock:
-                self.crash_count += 1
-                self.discard_count += 1
-                self.consecutive_crashes += 1
-                self.status_counts["CRASH"] = self.status_counts.get("CRASH", 0) + 1
-                if self.consecutive_crashes >= config.MAX_CONSECUTIVE_CRASHES and not self.aborted:
-                    self.aborted = f"{self.consecutive_crashes} pipelines crashed in a row; the endpoint looks down or overloaded"
-            if progress:
-                progress.console.print(f"[bold red]x Pipeline crash:[/bold red] {state['crash_error']}")
-            await self._write_outputs(state, None, "CRASH", state["crash_error"])
-            return None
+                self.consecutive_crashes = 0
+                self.total_tokens += state.get("total_tokens", 0)
+                self.total_cost += state.get("total_cost", 0.0)
+                self.status_counts[final_status] = self.status_counts.get(final_status, 0) + 1
+                if state.get("judge_host"):
+                    self.judge_hosts[state["judge_host"]] = self.judge_hosts.get(state["judge_host"], 0) + 1
+                if record is not None:
+                    # Every approved sample is written, even past the target: the spawn loop is what stops.
+                    self.total_approved += 1
+                    self.session_approved += 1
+                    if board:
+                        analysis = state["analysis_json"]
+                        badge = "[bold red]CRISIS[/bold red]" if analysis.get("distressFlag") else "[dim green]safe[/dim green]"
+                        verdict = state.get("judge_verdict") or {}
+                        board.log(
+                            f"{tag} [bold green]+ Sample #{self.total_approved:04d} approved[/bold green] | mood {analysis.get('moodScore')}/10 ({escape(str(analysis.get('sentiment')))}) "
+                            f"| {len(state['entry'].split())} words | {badge} | judge {verdict.get('overall')}/10 via {state.get('judge_host')}"
+                            f"{' | label repaired' if state.get('judge_retry_count') else ''}{' | entry rewritten' if state.get('entry_repair_count') else ''}"
+                            f"{' | 2nd judge ' + str(state.get('judge2_verdict', {}).get('overall')) + '/10 via ' + str(state.get('judge2_host')) if state.get('judge2_passed') is not None else ''}"
+                            f" | {fmt_seconds(TRACKER.samples[attempt].elapsed()) if attempt in TRACKER.samples else ''}"
+                        )
+                        board.advance()
+                else:
+                    self.discard_count += 1
+                    if board:
+                        board.log(f"{tag} [bold red]- {final_status}[/bold red] [dim]| {escape(str(reason)[:140])}[/dim]")
+                if board:
+                    pass_rate = (self.session_approved / self.total_attempts) * 100
+                    board.stats(f"[yellow]pass {pass_rate:.0f}%[/yellow] | [magenta]{self.total_tokens / 1000:.0f}k tokens[/magenta] | [cyan]${self.total_cost:.2f}[/cyan]")
 
-        final_status = state.get("final_status", "PENDING")
-        if final_status not in ("PASSED",) and not final_status.startswith("FAILED"):
-            final_status = "FAILED_UNKNOWN"
-        reason = state.get("discard_reason")
-        record = None
-        if final_status == "PASSED":
-            record = format_record(
-                state["entry"], state["analysis_json"], profile,
-                models={
-                    "writer": state.get("writer_model"), "reviewer": state.get("reviewer_model"), "teacher": self.runtime.analyzer.model,
-                    "judge": state.get("judge_model"), "judge_host": state.get("judge_host"), "judge2": state.get("judge2_model") if state.get("judge2_verdict") else None,
-                },
-                judge_verdict=state.get("judge_verdict") or {}, judge2_verdict=state.get("judge2_verdict") or None,
-                judge_retries=state.get("judge_retry_count", 0), editor_iterations=state.get("editor_iteration", 0),
-                entry_repairs=state.get("entry_repair_count", 0), judge2_passed=state.get("judge2_passed"),
-            )
-
-        async with self.lock:
-            self.consecutive_crashes = 0
-            self.total_tokens += state.get("total_tokens", 0)
-            self.total_cost += state.get("total_cost", 0.0)
-            self.status_counts[final_status] = self.status_counts.get(final_status, 0) + 1
-            if state.get("judge_host"):
-                self.judge_hosts[state["judge_host"]] = self.judge_hosts.get(state["judge_host"], 0) + 1
-            if record is not None:
-                # Every approved sample is written, even past the target: the spawn loop is what stops.
-                self.total_approved += 1
-                self.session_approved += 1
-                if progress:
-                    analysis = state["analysis_json"]
-                    badge = "[bold red]CRISIS[/bold red]" if analysis.get("distressFlag") else "[dim green]safe[/dim green]"
-                    verdict = state.get("judge_verdict") or {}
-                    progress.console.print(
-                        f"  [bold green]+ Sample #{self.total_approved:04d}[/bold green] | mood {analysis.get('moodScore')}/10 ({analysis.get('sentiment')}) "
-                        f"| {len(state['entry'].split())} words | {badge} | judge {verdict.get('overall')}/10 via {state.get('judge_host')}"
-                        f"{' | label repaired' if state.get('judge_retry_count') else ''}{' | entry rewritten' if state.get('entry_repair_count') else ''}"
-                        f"{' | 2nd judge ' + str(state.get('judge2_verdict', {}).get('overall')) + '/10 via ' + str(state.get('judge2_host')) if state.get('judge2_passed') is not None else ''}"
-                    )
-                    progress.advance(task_id)
-            else:
-                self.discard_count += 1
-                if progress:
-                    progress.console.print(f"  [bold red]- {final_status}[/bold red] [dim]| {str(reason)[:110]}[/dim]")
-            if progress:
-                pass_rate = (self.session_approved / self.total_attempts) * 100
-                progress.update(task_id, stats=f"[yellow]pass {pass_rate:.0f}%[/yellow] | [magenta]{self.total_tokens / 1000:.0f}k tokens[/magenta] | [cyan]${self.total_cost:.2f}[/cyan]")
-
-        await self._write_outputs(state, record, final_status, reason)
-        return record
+            await self._write_outputs(state, record, final_status, reason)
+            return record
+        finally:
+            TRACKER.finish(attempt)
 
     async def _write_outputs(self, state: dict, record: dict | None, final_status: str, reason: str | None) -> None:
         if self.dry_run:
@@ -281,6 +300,151 @@ class PipelineManager:
                 self.raw_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.raw_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def describe_profile(profile: dict) -> str:
+    """One line on what the sample is meant to be: who writes, how they feel, about what, in which style."""
+    def short(value, limit: int = 42) -> str:
+        text = str(value or "").split(" (")[0].strip()
+        return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+    persona = profile.get("persona") or {}
+    who = f"{short(persona.get('role'))}, {short(persona.get('age_group'))}" if isinstance(persona, dict) else short(persona)
+    parts = [who, short(profile.get("emotion")), short(profile.get("topic")), short(profile.get("style"), 30), short((profile.get("length") or {}).get("category"))]
+    text = escape(" / ".join(p for p in parts if p))
+    edge = (profile.get("edge_case") or {}).get("type")
+    if edge:
+        text += f" / edge case [bold]{escape(str(edge))}[/bold]"
+    if profile.get("custom_persona_prompt"):
+        text += " / custom instructions"
+    return text
+
+
+def stage_event(node: str, out: dict, state: dict) -> str | None:
+    """One line for a decision the sample just passed through; None for steps with nothing to say.
+    `state` is the state before this node's update, so rounds are numbered as the agent saw them."""
+    clip = lambda s, n=110: escape(" ".join(str(s or "").split())[:n])  # noqa: E731
+    if node == "writer":
+        return f"writer drafted {len(out.get('entry', '').split())} words"
+    if node == "editor":
+        return f"editor revised the entry, now {len(out.get('entry', '').split())} words"
+    if node == "reviewer":
+        review = out.get("review") or {}
+        rounds = state.get("editor_iteration", 0)
+        if review.get("approved"):
+            return f"[magenta]reviewer approved[/magenta] on round {rounds + 1}"
+        nxt = "to the editor" if rounds < config.MAX_EDITOR_ITERATIONS else "no rounds left, discarding"
+        return f"[magenta]reviewer wants changes[/magenta] on round {rounds + 1}, {nxt}: {clip(review.get('critique'))}"
+    if node == "analyzer":
+        if out.get("analysis_error"):
+            return f"[blue]analyzer[/blue] returned no usable JSON: {clip(out['analysis_error'])}"
+        return "[blue]analyzer[/blue] produced labels"
+    if node == "schema_validator":
+        err = out.get("analysis_error")
+        if not err:
+            return "validator: schema and business rules ok"
+        retries = out.get("schema_retry_count", 0)
+        nxt = f"back to the analyzer (retry {retries})" if retries < config.MAX_SCHEMA_RETRY else "no retries left, discarding"
+        return f"validator rejected the labels, {nxt}: {clip(err)}"
+    if node == "judge":
+        v = out.get("judge_verdict") or {}
+        head = f"[green]judge[/green] {out.get('judge_host')}: overall {v.get('overall')}/10, safety {v.get('safety')}/10"
+        if v.get("hard_fail"):
+            head += f", hard fail ({clip(v.get('hard_fail_reason'), 60)})"
+        status = out.get("final_status")
+        if status == "PASSED":
+            return head + " -> [bold green]pass[/bold green]"
+        if status == "REPAIRING_ENTRY":
+            return head + f" -> entry back to the editor: {clip(v.get('entry_notes'))}"
+        if status == "REPAIRING":
+            return head + f" -> labels back to the analyzer: {clip(v.get('label_notes') or out.get('analysis_error'))}"
+        return head + f" -> [red]discard[/red]: {clip(out.get('discard_reason'))}"
+    if node == "judge2":
+        v = out.get("judge2_verdict") or {}
+        if out.get("judge2_passed") is None:
+            return f"[bright_green]second judge[/bright_green] skipped: {clip(v.get('skipped', 'no other host available'))}" if v else None
+        head = f"[bright_green]second judge[/bright_green] {out.get('judge2_host')}: overall {v.get('overall')}/10"
+        if out.get("judge2_passed") == state.get("first_judge_passed"):
+            return head + " -> agrees with the first judge"
+        if state.get("first_judge_passed"):
+            return head + f" -> [red]overturned the pass[/red]: {clip(out.get('discard_reason'))}"
+        return head + " -> would have passed it; the first judge's fail stands and its reputation drops"
+    return None
+
+
+class RunBoard:
+    """What the terminal shows during a run: the progress bar, counters, one row per sample in flight
+    with its current agent and how long it has been there. Event lines print above the board."""
+
+    STAGE_STYLES = {
+        "queued": "dim", "writer": "cyan", "reviewer": "magenta", "editor": "yellow", "analyzer": "blue",
+        "validator": "white", "judge": "green", "second judge": "bright_green",
+    }
+
+    def __init__(self, manager: PipelineManager, *, to_add: int, existing: int, console: Console):
+        self.manager = manager
+        self.console = console
+        self.progress = Progress(
+            SpinnerColumn(spinner_name="dots", style="bright_cyan"), TextColumn("[bold]{task.description}[/bold]"),
+            BarColumn(bar_width=30), MofNCompleteColumn(), TextColumn("{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(), TimeRemainingColumn(), TextColumn("{task.fields[stats]}"), console=console,
+        )
+        self.task_id = self.progress.add_task(f"Adding {to_add} (dataset has {existing})", total=to_add, completed=0, stats="")
+        self.live = Live(self, console=console, refresh_per_second=4)
+
+    def __enter__(self) -> "RunBoard":
+        TRACKER.note_listeners.append(self._on_note)
+        self.live.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.live.stop()
+        if self._on_note in TRACKER.note_listeners:
+            TRACKER.note_listeners.remove(self._on_note)
+
+    def _on_note(self, attempt: int, text: str) -> None:
+        self.log(f"[dim]#{attempt} {escape(text)}[/dim]")
+
+    def log(self, text: str) -> None:
+        self.console.print(text)
+
+    def advance(self) -> None:
+        self.progress.advance(self.task_id)
+
+    def stats(self, text: str) -> None:
+        self.progress.update(self.task_id, stats=text)
+
+    def counters(self) -> Text:
+        m = self.manager
+        outcomes = ", ".join(f"{k} {v}" for k, v in sorted(m.status_counts.items()) if k != "PASSED") or "none"
+        pass_rate = (m.session_approved / m.total_attempts * 100) if m.total_attempts else 0.0
+        return Text.from_markup(
+            f"[bold]In flight:[/bold] {len(TRACKER)} (limit {config.CONCURRENCY_CONTROLLER.current})   "
+            f"[bold]Started:[/bold] {m.total_attempts}   [bold]Approved:[/bold] {m.session_approved}/{m.target_count} (dataset {m.total_approved})   "
+            f"[bold]Discarded:[/bold] {m.discard_count} ({outcomes})   [bold]Pass rate:[/bold] {pass_rate:.0f}%   "
+            f"[bold]Tokens:[/bold] {m.total_tokens / 1000:.0f}k   [bold]Judge hosts:[/bold] "
+            + (", ".join(f"{k} {v}" for k, v in sorted(m.judge_hosts.items())) or "-")
+        )
+
+    def table(self) -> Table:
+        table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, expand=False)
+        table.add_column("#", justify="right", style="bold")
+        table.add_column("agent")
+        table.add_column("doing", no_wrap=True, overflow="ellipsis", max_width=72)
+        table.add_column("on this step", justify="right")
+        table.add_column("sample total", justify="right")
+        table.add_column("note", style="dim", no_wrap=True, overflow="ellipsis", max_width=70)
+        now = time.monotonic()
+        rows = TRACKER.rows()
+        for s in rows:
+            style = self.STAGE_STYLES.get(s.stage, "white")
+            table.add_row(str(s.attempt), f"[{style}]{s.stage}[/{style}]", escape(s.detail), fmt_seconds(s.stage_elapsed(now)), fmt_seconds(s.elapsed(now)), escape(s.note))
+        if not rows:
+            table.add_row("-", "[dim]nothing in flight[/dim]", "", "", "", "")
+        return table
+
+    def __rich__(self):
+        return Group(self.progress, self.counters(), self.table())
 
 
 def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
@@ -341,7 +505,8 @@ async def amain() -> None:
     _print_banner(args, manager, runtime, concurrency)
 
     if args.dry_run:
-        record = await manager.run_single_pipeline()
+        with RunBoard(manager, to_add=1, existing=existing, console=console) as board:
+            record = await manager.run_single_pipeline(board)
         if record is None:
             console.print("[bold red]The sample did not pass; see the reasons above.[/bold red]")
             return
@@ -357,18 +522,16 @@ async def amain() -> None:
         return
 
     config.CONCURRENCY_CONTROLLER.setup(concurrency)
-    with Progress(
-        SpinnerColumn(spinner_name="dots", style="bright_cyan"), TextColumn("[bold]{task.description}[/bold]"),
-        BarColumn(bar_width=30), MofNCompleteColumn(), TextColumn("{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(), TimeRemainingColumn(), TextColumn("{task.fields[stats]}"),
-        console=console, refresh_per_second=4,
-    ) as progress:
-        task_id = progress.add_task(f"Adding {to_add} (dataset has {existing})", total=to_add, completed=0, stats="")
+    with RunBoard(manager, to_add=to_add, existing=existing, console=console) as board:
+        board.log(
+            "[dim]Each sample runs writer -> reviewer (-> editor, up to 3 rounds) -> analyzer -> validator -> judge -> second judge. "
+            "The table shows where every sample is right now and how long it has been there; the lines above it are the agents' decisions.[/dim]"
+        )
         pending: set[asyncio.Task] = set()
         while manager.session_approved < to_add and not manager.aborted:
             limit = config.CONCURRENCY_CONTROLLER.current
             while len(pending) < limit and manager.session_approved + len(pending) < to_add:
-                pending.add(asyncio.create_task(manager.run_single_pipeline(progress, task_id)))
+                pending.add(asyncio.create_task(manager.run_single_pipeline(board)))
             if not pending:
                 break
             _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)

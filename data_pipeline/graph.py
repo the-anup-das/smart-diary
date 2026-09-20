@@ -38,6 +38,7 @@ from data_pipeline.agents.writer import generate_journal_entry
 from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.lessons import LessonsStore
 from data_pipeline.reputation import JudgeReputation
+from data_pipeline.status import TRACKER
 
 FINAL_STATUSES = ("PASSED", "FAILED_REVIEW", "FAILED_SCHEMA", "FAILED_JUDGE", "FAILED_JUDGE2")
 
@@ -129,7 +130,7 @@ def _acc(state: PipelineState, usage: dict) -> dict:
     }
 
 
-async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: dict, persona: Optional[str], lessons: list[str] | None = None) -> tuple[dict, dict, Endpoint]:
+async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: dict, persona: Optional[str], lessons: list[str] | None = None, stage: str = "judge") -> tuple[dict, dict, Endpoint]:
     """Try judge endpoints in order; a failing host cools down and the next one is used."""
     tried: set[Endpoint] = set()
     for _round in range(2):
@@ -138,15 +139,19 @@ async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: d
             if ep is None:
                 break
             try:
+                TRACKER.stage(stage, f"waiting for {ep.host}")
                 await runtime.judge_pool.throttle(ep)
+                TRACKER.stage(stage, f"grading on {ep.host}")
                 verdict, usage = await judge_candidate(entry, analysis_json, persona, endpoint=ep, lessons=lessons)
                 return verdict, usage, ep
-            except LLMCallError:
+            except LLMCallError as e:
                 runtime.judge_pool.penalise(ep)
                 tried.add(ep)
+                TRACKER.note(f"{ep.host} failed ({str(e)[:80]}); trying the next judge host")
         wait = runtime.judge_pool.seconds_until_available()
         if wait > config.ENDPOINT_COOLDOWN_S:
             break
+        TRACKER.stage(stage, f"every judge host is cooling down, {wait:.0f}s")
         await asyncio.sleep(wait)
         tried = set()
     raise LLMCallError("all judge endpoints are unavailable", retryable=True)
@@ -170,11 +175,14 @@ async def _log_disagreement(runtime: PipelineRuntime, state: PipelineState, ep: 
 def build_pipeline_graph(runtime: PipelineRuntime):
     async def writer_node(state: PipelineState) -> dict:
         ep = runtime.writer_endpoint(state.get("batch_index", 0))
+        TRACKER.stage("writer", f"drafting on {ep.host}")
         entry, usage = await generate_journal_entry(state["profile"], endpoint=ep, lessons=runtime.lessons.top("entry"))
         return {"entry": entry, "editor_iteration": 0, "writer_model": ep.model, "reviewer_model": runtime.reviewer_endpoint(ep.model).model, **_acc(state, usage)}
 
     async def reviewer_node(state: PipelineState) -> dict:
         ep = runtime.reviewer_endpoint(state.get("writer_model", ""))
+        repair = " after the judge's complaint" if state.get("entry_repair_count") else ""
+        TRACKER.stage("reviewer", f"round {state.get('editor_iteration', 0) + 1}{repair} on {ep.host}")
         review, usage = await review_journal_entry(state["entry"], state["profile"], endpoint=ep, lessons=runtime.lessons.top("reviewer"))
         if not review.get("approved"):
             await runtime.lessons.add("entry", review.get("critique", ""))
@@ -182,6 +190,8 @@ def build_pipeline_graph(runtime: PipelineRuntime):
 
     async def editor_node(state: PipelineState) -> dict:
         critique = state["review"].get("critique") or "Add concrete detail and remove generic phrasing."
+        why = "judge's complaint" if state.get("entry_repair_count") and state.get("editor_iteration", 0) == 0 else "reviewer's critique"
+        TRACKER.stage("editor", f"revision {state.get('editor_iteration', 0) + 1} from the {why} on {runtime.editor.host}")
         revised, usage = await edit_journal_entry(state["entry"], critique, state["profile"], endpoint=runtime.editor)
         return {"entry": revised, "editor_iteration": state.get("editor_iteration", 0) + 1, **_acc(state, usage)}
 
@@ -189,6 +199,13 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         persona = state["profile"].get("custom_persona_prompt")
         previous_error = state.get("analysis_error")
         previous_json = state.get("analysis_json") if previous_error and state.get("analysis_json") else None
+        if previous_error and previous_error.startswith("the quality judge rejected"):
+            what = "label repair from the judge's critique"
+        elif previous_error:
+            what = f"schema retry {state.get('schema_retry_count', 0)}"
+        else:
+            what = "labelling with the production prompt"
+        TRACKER.stage("analyzer", f"{what} on {runtime.analyzer.host}")
         data, error, usage = await analyze_journal_entry(
             state["entry"], persona, endpoint=runtime.analyzer,
             previous_json=previous_json, previous_error=previous_error, lessons=runtime.lessons.top("labels"),
@@ -196,6 +213,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         return {"analysis_json": data or {}, "analysis_error": error, "final_status": "PENDING", **_acc(state, usage)}
 
     async def schema_validator_node(state: PipelineState) -> dict:
+        TRACKER.stage("validator", "schema and business rules")
         is_valid, error, _ = validate_schema(state.get("analysis_json") or {})
         if is_valid:
             return {"analysis_error": None}
@@ -210,6 +228,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
     async def judge_node(state: PipelineState) -> dict:
         persona = state["profile"].get("custom_persona_prompt")
         runtime.order_judges()
+        TRACKER.stage("judge", "picking a host")
         verdict, usage, ep = await judge_with_pool(runtime, state["entry"], state["analysis_json"], persona, lessons=runtime.lessons.top("judge"))
         bump = runtime.reputation.threshold_bump(ep.label)
         passed = judge_passes(verdict, bump)
@@ -257,7 +276,9 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         persona = state["profile"].get("custom_persona_prompt")
         try:
             pool = runtime.judge2_pool if (runtime.judge2 is not None and runtime.judge2_pool) else runtime.judge_pool
+            TRACKER.stage("second judge", f"waiting for {ep.host} (rate limit)")
             await pool.throttle(ep)
+            TRACKER.stage("second judge", f"grading on {ep.host}")
             verdict, usage = await judge_candidate(state["entry"], state["analysis_json"], persona, endpoint=ep, lessons=runtime.lessons.top("judge"))
         except LLMCallError as e:
             if runtime.judge2 is None:
