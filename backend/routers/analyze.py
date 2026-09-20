@@ -14,13 +14,11 @@ import re
 import hashlib
 import threading
 from memory_service import ingest_diary_entry
+from llm_client import get_llm_client, get_model_name
 
 router = APIRouter()
-
-client = openai.OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", None)
-)
+client = get_llm_client()
+ACTIVE_MODEL = get_model_name()
 
 class GrammarFix(BaseModel):
     original: str
@@ -78,6 +76,7 @@ class CognitionSignalsSchema(BaseModel):
     brainRotLoad: int = Field(ge=0, le=3, description="0 nothing relevant; 1 passive consumption or fog mentioned; 2 both, or one of them with an intended deep activity displaced; 3 heavy: fog plus hours of passive consumption plus sleep, work or reading displaced.")
 
 class FeedbackReportSchema(BaseModel):
+    thought_reasoning: str = Field(default="", description="Internal reasoning block. Must be the first field generated to allow Chain-of-Thought before finalizing the report.")
     moodScore: int = Field(ge=1, le=10, description="Score the emotional state from 1 (Despair) to 10 (Euphoric).")
     sentiment: str = Field(description="A single word describing the core sentiment (Stressed, Joyful, Neutral, Anxious, Focused, Calm, etc).")
     grammarScore: int = Field(ge=1, le=10, description="Score the English grammar quality.")
@@ -157,7 +156,7 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
         
     response = client.beta.chat.completions.parse(
-        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        model=ACTIVE_MODEL,
         messages=[
             {
                 "role": "system",

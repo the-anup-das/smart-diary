@@ -129,13 +129,15 @@ SYSTEM_PROMPT = (
     "reaching out to a person they trust."
 )
 
+from llm_client import get_llm_client, get_model_name
+
 _client: Optional[openai.OpenAI] = None
 
 def _get_client() -> openai.OpenAI:
     """Lazy client so importing this module never requires an API key (tests, evals)."""
     global _client
     if _client is None:
-        _client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL", None))
+        _client = get_llm_client()
     return _client
 
 
@@ -173,7 +175,7 @@ def build_reset_plan(entry_text: str, energy: Optional[dict] = None, memories: s
         system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
 
     response = _get_client().beta.chat.completions.parse(
-        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        model=get_model_name(),
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": entry_text},

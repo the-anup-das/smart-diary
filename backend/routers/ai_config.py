@@ -19,12 +19,14 @@ router = APIRouter()
 
 
 def _provider_info():
-    base_url = os.getenv("OPENAI_BASE_URL")
+    from llm_client import get_model_name
+    use_local = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
+    base_url = os.getenv("LOCAL_LLM_BASE_URL", "http://sglang:30000/v1") if use_local else os.getenv("OPENAI_BASE_URL")
     host = urlparse(base_url).netloc if base_url else "api.openai.com"
     return {
         "host": host,
-        "is_custom": bool(base_url),
-        "chat_model": os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        "chat_model": get_model_name(),
+        "is_local": use_local,
         "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
     }
 
@@ -37,15 +39,14 @@ def get_ai_config(user_id: str = Depends(verify_session)):
 @router.post("/api/ai/test", dependencies=[Depends(rate_limit("ai_test", 5, 60))])
 def test_ai_connection(user_id: str = Depends(verify_session)):
     info = _provider_info()
-    client = openai.OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL", None),
-        timeout=15,
-    )
+    from llm_client import get_llm_client, get_model_name
+    client = get_llm_client()
+    # Override timeout for testing endpoint
+    client.timeout = 15.0
     started = time.monotonic()
     try:
         response = client.chat.completions.create(
-            model=info["chat_model"],
+            model=get_model_name(),
             messages=[{"role": "user", "content": "Reply with the single word: ok"}],
             max_tokens=5,
         )

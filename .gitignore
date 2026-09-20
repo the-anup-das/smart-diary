@@ -73,6 +73,15 @@ docker-compose.override.yml
 /src/generated/prisma
 
 # ============================================================
+# Synthetic Data Pipeline & Model Artifacts
+# ============================================================
+data_pipeline/output/
+data_pipeline/logs/
+*.gguf
+output/
+outputs/
+
+# ============================================================
 # Logs & debug
 # ============================================================
 *.log

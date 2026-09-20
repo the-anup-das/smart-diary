@@ -25,8 +25,9 @@ _MEM0_CONFIG = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": os.getenv("CHAT_MODEL", "gpt-4o-mini"),
-            "api_key": os.getenv("OPENAI_API_KEY"),
+            "model": "default" if os.getenv("USE_LOCAL_LLM", "false").lower() == "true" else os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+            "api_key": "empty" if os.getenv("USE_LOCAL_LLM", "false").lower() == "true" else os.getenv("OPENAI_API_KEY"),
+            **({"openai_base_url": os.getenv("LOCAL_LLM_BASE_URL", "http://sglang:30000/v1")} if os.getenv("USE_LOCAL_LLM", "false").lower() == "true" else {}),
         }
     },
     "embedder": {

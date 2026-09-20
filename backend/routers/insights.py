@@ -13,12 +13,11 @@ import re
 import builtins  # the endpoint parameter is named `range`, which shadows the built-in
 from wellbeing import WELLBEING_AXES, RUMINATION_TO_CALM, average_axes
 
+from llm_client import get_llm_client, get_model_name
+
 router = APIRouter()
 
-_openai_client = openai.OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", None)
-)
+_openai_client = get_llm_client()
 
 def _get_date_range(range_str: str):
     """Compute start date based on the range filter."""
@@ -472,7 +471,7 @@ def get_weekly_review(
         digest_lines.append(f"### {day} ({mood}){f' — topics: {topics}' if topics else ''}\n{text}")
 
     response = _openai_client.beta.chat.completions.parse(
-        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        model=get_model_name(),
         messages=[
             {"role": "system", "content": (
                 "You are a reflective journaling coach writing a weekly review for this user. "

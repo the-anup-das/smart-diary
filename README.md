@@ -279,6 +279,27 @@ EMBEDDING_MODEL="nomic-embed-text-v1.5"
 
 ---
 
+## ⚡ Self-Hosted Fine-Tuned SLM (SGLang & Distillation)
+
+Notebook includes a complete multi-agent synthetic data distillation, QLoRA fine-tuning, and SGLang deployment pipeline in [`data_pipeline/`](./data_pipeline). This allows you to replace commercial cloud APIs with your own private ~3B model (Qwen 2.5, Phi-3.5, or Llama 3.2) specialized for CBT reflection, emotion analysis, and strict JSON schemas.
+
+### 1. Enable Local SGLang Inference
+In your `.env` file:
+```env
+USE_LOCAL_LLM=true
+LOCAL_LLM_BASE_URL=http://sglang:30000/v1
+```
+
+### 2. Launch Stack with GPU Inference
+```bash
+docker compose --profile local-ai up -d
+```
+This runs the full stack with **SGLang** on port `30000` with **RadixAttention** (KV cache reuse) and Guided JSON decoding. When `USE_LOCAL_LLM=true`, all features (Diary Analysis, Chat, Insights, Guided Meditation, Decisions) are served locally with zero external API calls.
+
+See [`data_pipeline/README.md`](./data_pipeline/README.md) for details on generating synthetic datasets, training LoRA adapters with Unsloth, and running model benchmarks.
+
+---
+
 ## 💾 Data Persistence & Backup
 
 ### NAS Deployment (OpenMediaVault/Synology/QNAP)

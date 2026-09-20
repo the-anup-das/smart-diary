@@ -180,7 +180,9 @@ function ProviderPanel() {
           {config ? (
             <p className="text-xs text-gray-500 font-mono mt-0.5">
               {config.host} · {config.chat_model}
-              {config.is_custom && (
+              {config.is_local ? (
+                <span className="ml-2 px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 text-[10px] font-sans font-semibold not-italic">local AI</span>
+              ) : config.is_custom && (
                 <span className="ml-2 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-sans font-semibold not-italic">custom endpoint</span>
               )}
             </p>

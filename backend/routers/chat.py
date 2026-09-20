@@ -23,13 +23,10 @@ import openai
 import json
 import os
 import re
+from llm_client import get_llm_client, get_model_name
 
 router = APIRouter()
-
-client = openai.OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", None)
-)
+client = get_llm_client()
 
 STOPWORDS = {
     "the", "and", "for", "that", "this", "with", "what", "when", "where", "how",
@@ -201,7 +198,7 @@ def chat_with_diary(payload: ChatRequest, user_id: str = Depends(verify_session)
         yield json.dumps({"conversation_id": convo.id, "sources": sources}) + "\n"
         try:
             stream = client.chat.completions.create(
-                model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+                model=get_model_name(),
                 messages=llm_messages,
                 temperature=0.4,
                 max_tokens=700,

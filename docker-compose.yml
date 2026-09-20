@@ -28,6 +28,9 @@ services:
       # Natively maps Docker PostgreSQL DNS directly to SQLAlchemy
       - DATABASE_URL=postgresql://diary_user:diary_password@db:5432/diary_db
       - JWT_SECRET=super-secret-diary-key-you-should-change
+      # LLM Strategy Toggle: Set to true to route traffic to local SGLang SLM
+      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-false}
+      - LOCAL_LLM_BASE_URL=http://sglang:30000/v1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # STT: remove or leave blank to disable voice feature entirely
       - STT_BASE_URL=http://stt-server:8000/v1
@@ -37,6 +40,33 @@ services:
       - db
       - qdrant
       - stt-server
+      # Notice sglang is removed from depends_on because it is now an optional profile
+
+  # Phase 3: SGLang Local Inference Engine (NVIDIA GPU required)
+  # NOTE: This service will ONLY start if you run: docker compose --profile local-ai up -d
+  sglang:
+    image: lmsysorg/sglang:latest
+    container_name: diary-sglang
+    profiles: ["local-ai"]
+    restart: unless-stopped
+    ports:
+      - "30000:30000"
+    volumes:
+      # Mount the pipeline output dir into the container
+      - ./data_pipeline/output:/models
+    command: >
+      python3 -m sglang.launch_server 
+      --model-path /models/model_qwen_q4_k_m/unsloth.Q4_K_M.gguf 
+      --port 30000 
+      --chat-template chatml 
+      --host 0.0.0.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   qdrant:
     image: qdrant/qdrant:latest

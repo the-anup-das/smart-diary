@@ -67,8 +67,15 @@ class PathEvalState(TypedDict):
 
 
 # --- 3. Initialize LLM ---
+from llm_client import get_model_name
 import os
-llm = ChatOpenAI(model=os.getenv("CHAT_MODEL", "gpt-4o-mini"), temperature=0.2)
+use_local = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
+llm = ChatOpenAI(
+    model=get_model_name(),
+    temperature=0.2,
+    api_key="empty" if use_local else os.getenv("OPENAI_API_KEY", ""),
+    base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://sglang:30000/v1") if use_local else os.getenv("OPENAI_BASE_URL", None)
+)
 llm_json_orchestrator = llm.with_structured_output(OrchestratorOutput)
 llm_json_evaluator = llm.with_structured_output(PathEvaluationModel)
 llm_json_synthesis = llm.with_structured_output(SynthesisOutputModel)
