@@ -98,7 +98,7 @@ def test_host_limiter_caps_parallel_requests_and_paces_starts():
     from data_pipeline.endpoints import HostLimiter, host_limiter, reset_host_limiters
 
     async def scenario():
-        limiter = HostLimiter(2, pacing_s=0.02)
+        limiter = HostLimiter(2, pacing_s=0.1)      # coarse Windows timers: keep every interval well above 16 ms
         peak = 0
         active = 0
         starts = []
@@ -109,7 +109,7 @@ def test_host_limiter_caps_parallel_requests_and_paces_starts():
                 starts.append(time.monotonic())
                 active += 1
                 peak = max(peak, active)
-                await asyncio.sleep(0.15)     # longer than the pacing, so two requests overlap
+                await asyncio.sleep(0.3)      # longer than the pacing, so two requests overlap
                 active -= 1
 
         await asyncio.gather(*(request() for _ in range(5)))
@@ -117,7 +117,7 @@ def test_host_limiter_caps_parallel_requests_and_paces_starts():
         return peak, gaps, limiter.waiting
 
     peak, gaps, waiting = asyncio.run(scenario())
-    assert peak == 2 and waiting == 0 and all(g >= 0.015 for g in gaps)   # never more than two at once, starts spaced out
+    assert peak == 2 and waiting == 0 and all(g >= 0.05 for g in gaps)   # never more than two at once, starts spaced out
 
     async def registry():
         reset_host_limiters()
