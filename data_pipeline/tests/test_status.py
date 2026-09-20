@@ -142,3 +142,40 @@ def test_board_fits_the_terminal_and_counts_every_sample(tmp_path, monkeypatch):
     with console.capture() as cap:
         console.print(board.tally())
     assert "Nothing in flight" in cap.get()
+
+
+def test_plain_mode_prints_lines_instead_of_a_live_region(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from data_pipeline import config
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.run import RunBoard
+
+    monkeypatch.setattr(config, "TELEMETRY_LOG_PATH", tmp_path / "t.jsonl")
+    ep = Endpoint(base_url="http://t/v1", api_key="k", model="teacher", name="analyzer")
+    manager = PipelineManager(100, SimpleNamespace(analyzer=ep), None, seed=1, dry_run=True)
+    console = Console(width=160, height=20, force_terminal=False)
+
+    board = RunBoard(manager, to_add=100, existing=8, console=console)
+    assert board.plain and board.live is None          # not a terminal: no live region, so a redirected log stays readable
+    board = RunBoard(manager, to_add=100, existing=8, console=console, plain=True)
+    monkeypatch.setattr(type(console), "is_terminal", property(lambda self: True))
+    assert RunBoard(manager, to_add=1, existing=0, console=console).live is not None   # a terminal gets the board back
+    assert RunBoard(manager, to_add=1, existing=0, console=console, plain=True).live is None
+
+    for i in (1, 2):
+        TRACKER.start(i)
+        TRACKER.stage("writer", "drafting on api.example.com")
+    try:
+        with console.capture() as cap:
+            board.heartbeat(force=True)
+        line = cap.get()
+        assert "approved 0/100" in line and "#1 writer" in line and "#2 writer" in line
+        with console.capture() as cap:
+            board.heartbeat()                           # too soon after the last one
+        assert cap.get() == ""
+    finally:
+        TRACKER.finish(1)
+        TRACKER.finish(2)

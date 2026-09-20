@@ -79,6 +79,12 @@ python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the data
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
+`--plain` turns the live table off and prints only the lines, which is what you want when you
+need to scroll back through the history or pipe the run to a file; a status line then reports
+where every sample is every 30 seconds (`BOARD_HEARTBEAT_S`). The live board repaints in place,
+so the terminal cannot scroll while it is running, and it turns itself off when the output is
+not a terminal.
+
 While it runs, the terminal shows a board: the progress bar, counters (in flight, started,
 approved, discarded by reason, pass rate, tokens, judge hosts) and one row per sample in flight
 with the agent it is on, what that agent is doing and for how long. Every decision prints above

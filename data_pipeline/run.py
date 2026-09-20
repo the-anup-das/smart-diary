@@ -381,26 +381,50 @@ class RunBoard:
         "validator": "white", "judge": "green", "second judge": "bright_green",
     }
 
-    def __init__(self, manager: PipelineManager, *, to_add: int, existing: int, console: Console):
+    def __init__(self, manager: PipelineManager, *, to_add: int, existing: int, console: Console, plain: bool = False):
         self.manager = manager
         self.console = console
+        # A live region repaints in place: the terminal cannot scroll while it runs and the output
+        # is unreadable in a file. --plain, and anything that is not a terminal, prints lines instead.
+        self.plain = plain or not console.is_terminal
         self.progress = Progress(
             SpinnerColumn(spinner_name="dots", style="bright_cyan"), TextColumn("[bold]{task.description}[/bold]"),
             BarColumn(bar_width=30), MofNCompleteColumn(), TextColumn("{task.percentage:>3.0f}%"),
             TimeElapsedColumn(), TimeRemainingColumn(), TextColumn("{task.fields[stats]}"), console=console,
         )
         self.task_id = self.progress.add_task(f"Adding {to_add} (dataset has {existing})", total=to_add, completed=0, stats="")
-        self.live = Live(self, console=console, refresh_per_second=4)
+        self.live = None if self.plain else Live(self, console=console, refresh_per_second=4)
+        self.heartbeat_every = float(os.getenv("BOARD_HEARTBEAT_S", "30"))
+        self._last_heartbeat = 0.0
 
     def __enter__(self) -> "RunBoard":
         TRACKER.note_listeners.append(self._on_note)
-        self.live.start()
+        if self.live is not None:
+            self.live.start()
         return self
 
     def __exit__(self, *exc) -> None:
-        self.live.stop()
+        if self.live is not None:
+            self.live.stop()
         if self._on_note in TRACKER.note_listeners:
             TRACKER.note_listeners.remove(self._on_note)
+
+    def heartbeat(self, force: bool = False) -> None:
+        """In plain mode, print where every sample is every BOARD_HEARTBEAT_S seconds."""
+        if not self.plain:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_heartbeat < self.heartbeat_every:
+            return
+        self._last_heartbeat = now
+        m = self.manager
+        rows = sorted(TRACKER.rows(), key=lambda s: s.started)
+        where = "; ".join(f"#{s.attempt} {s.stage} {fmt_seconds(s.elapsed(now))}" for s in rows[:8])
+        more = f" (+{len(rows) - 8} more)" if len(rows) > 8 else ""
+        self.console.print(
+            f"[dim]--- approved {m.session_approved}/{m.target_count}, started {m.total_attempts}, discarded {m.discard_count}, "
+            f"{m.total_tokens / 1000:.0f}k tokens | {where}{more}[/dim]"
+        )
 
     def _on_note(self, attempt: int, text: str) -> None:
         self.log(f"[dim]#{attempt} {escape(text)}[/dim]")
@@ -413,6 +437,8 @@ class RunBoard:
 
     def stats(self, text: str) -> None:
         self.progress.update(self.task_id, stats=text)
+        if self.plain:
+            self.heartbeat()
 
     def counters(self) -> Text:
         m = self.manager
@@ -503,6 +529,7 @@ async def amain() -> None:
     parser.add_argument("--no-lessons", action="store_true", help="disable the rejection-lessons loop (for A/B comparison)")
     parser.add_argument("--no-judge2", action="store_true", help="disable the second-opinion judge")
     parser.add_argument("--dry-run", action="store_true", help="run one sample, print the record, write nothing")
+    parser.add_argument("--plain", action="store_true", help="no live table, just printed lines, so the terminal scrolls and the output can be piped to a file")
     args = parser.parse_args()
 
     config.require_api_key()
@@ -525,7 +552,7 @@ async def amain() -> None:
     _print_banner(args, manager, runtime, concurrency)
 
     if args.dry_run:
-        with RunBoard(manager, to_add=1, existing=existing, console=console) as board:
+        with RunBoard(manager, to_add=1, existing=existing, console=console, plain=args.plain) as board:
             record = await manager.run_single_pipeline(board)
         if record is None:
             console.print("[bold red]The sample did not pass; see the reasons above.[/bold red]")
@@ -542,10 +569,11 @@ async def amain() -> None:
         return
 
     config.CONCURRENCY_CONTROLLER.setup(concurrency)
-    with RunBoard(manager, to_add=to_add, existing=existing, console=console) as board:
+    with RunBoard(manager, to_add=to_add, existing=existing, console=console, plain=args.plain) as board:
         board.log(
             "[dim]Each sample runs writer -> reviewer (-> editor, up to 3 rounds) -> analyzer -> validator -> judge -> second judge. "
-            "The table shows where every sample is right now and how long it has been there; the lines above it are the agents' decisions.[/dim]"
+            "Every line below is an agent's decision"
+            + ("; a status line follows every few samples.[/dim]" if board.plain else ", and the table under them shows where each sample is right now.[/dim]")
         )
         pending: set[asyncio.Task] = set()
         while manager.session_approved < to_add and not manager.aborted:
@@ -555,6 +583,7 @@ async def amain() -> None:
             if not pending:
                 break
             _done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=1.0)
+            board.heartbeat()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
