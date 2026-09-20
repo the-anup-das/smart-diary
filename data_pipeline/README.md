@@ -49,7 +49,7 @@ Google keys used by the judge overflow are picked up from there.
 | Writer, reviewer, editor | `Qwen/Qwen3-30B-A3B-Instruct-2507` on `LLM_BASE_URL` | fast, good prose |
 | Analyzer (teacher) | one fixed model, `ANALYZER_MODEL` | labels keep a single calibration; chosen on the golden set |
 | Judge | `Ternary-Bonsai-2-27B` on `LLM_BASE_URL`, then LM Studio, then Gemini 3.6 Flash | a different family grades the labels; hosts rotate on rate limits or outages |
-| Second judge | another host from the judge list, or Cerebras `gpt-oss-120b` when `CEREBRAS_API_KEY` is set | re-judges every sample; a fail from either judge is a fail; disagreements move the first judge's reputation |
+| Second judge | another host from the judge list (`JUDGE2_ENDPOINT` for a dedicated one) | re-judges every sample; a fail from either judge is a fail; disagreements move the first judge's reputation |
 
 Every role can live on its own server (`<ROLE>_BASE_URL`, `<ROLE>_API_KEY`, `<ROLE>_MODEL`).
 Judges are a list: `base_url|key|model[|extra_json]` entries separated by `;`, where `key` is

@@ -306,12 +306,15 @@ class PipelineManager:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+PERMANENT_STATUSES = (401, 402, 403, 404)   # a key, a bill or a model id: retrying cannot help
+
+
 def fatal_reason(error: Exception) -> str | None:
     """A reason to stop the whole run after one crash: the host rejects the model or the key, so every sample would fail the same way."""
-    if isinstance(error, LLMCallError) and not error.retryable and error.status in (401, 403, 404):
+    if isinstance(error, LLMCallError) and not error.retryable and error.status in PERMANENT_STATUSES:
         ep = error.endpoint
         where = f"{ep.model} on {ep.host}" if ep else "an endpoint"
-        what = "does not serve this model" if error.status == 404 else "rejects the API key"
+        what = {404: "does not serve this model", 402: "wants payment for it"}.get(error.status, "rejects the API key")
         return f"{where}: the host {what} ({str(error)[:160]}). Check the model id and the key, then run the same command again"
     return None
 
@@ -319,12 +322,12 @@ def fatal_reason(error: Exception) -> str | None:
 async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
     """One-token request to every model a run depends on. A host can list a model and still not serve it."""
     roles: list[tuple[str, Endpoint, bool]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
 
     def add(role: str, ep: Endpoint | None, required: bool) -> None:
-        if ep is None or (ep.host, ep.model) in seen:
+        if ep is None or (ep.host, ep.model, ep.api_key) in seen:
             return
-        seen.add((ep.host, ep.model))
+        seen.add((ep.host, ep.model, ep.api_key))
         roles.append((role, ep, required))
 
     for ep in runtime.writers:
@@ -342,6 +345,10 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
             await acall_llm(ep, [{"role": "user", "content": "Reply with the single word: ok"}], temperature=0.0, max_tokens=4, max_retries=1)
             return role, ep, None, time.monotonic() - started
         except LLMCallError as e:
+            permanent = not e.retryable and e.status in PERMANENT_STATUSES
+            if role in ("judge", "second judge"):
+                pool = runtime.judge2_pool if role == "second judge" and runtime.judge2_pool else runtime.judge_pool
+                pool.penalise(ep, 10 * 3600 if permanent else None)   # sidelined for the run, or for one cooldown
             return role, ep, str(e)[:140], time.monotonic() - started
         except Exception as e:  # noqa: BLE001
             return role, ep, f"{type(e).__name__}: {e}"[:140], time.monotonic() - started
@@ -363,6 +370,10 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
     if not any(role == "judge" for role, _, _ in roles) or judges_ok == 0:
         ok = False
         table.add_row("judge", "-", "[red]FAIL[/red] no judge host answered")
+    for (role, ep, _), (_, _, error, _) in zip(roles, results):
+        if role == "second judge" and error and runtime.judge2 is not None:
+            runtime.judge2, runtime.judge2_pool = None, None
+            table.add_row("second judge", "another host from the judge list", "[yellow]fallback[/yellow] the dedicated second judge is unavailable")
     console.print(table)
     return ok
 
@@ -627,8 +638,6 @@ async def amain() -> None:
         to_add, runtime, graph, seed=args.seed, force_edge_cases=args.force_edge_cases,
         edge_case_rate=args.edge_rate, persona_rate=args.persona_rate, dry_run=args.dry_run,
     )
-    _print_banner(args, manager, runtime, concurrency)
-
     if args.check or not args.skip_preflight:
         healthy = await preflight(runtime, console)
         if args.check:
@@ -637,6 +646,7 @@ async def amain() -> None:
         if not healthy:
             console.print("[bold red]Not starting: a required model does not answer. Fix the endpoint or the env, or pass --skip-preflight.[/bold red]")
             raise SystemExit(1)
+    _print_banner(args, manager, runtime, concurrency)
 
     if args.dry_run:
         with RunBoard(manager, to_add=1, existing=existing, console=console, plain=args.plain) as board:

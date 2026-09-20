@@ -137,3 +137,48 @@ def test_preflight_reports_every_role_and_fails_on_a_required_model(tmp_path, mo
     with console.capture() as cap:
         healthy = asyncio.run(run_module.preflight(runtime, console))
     assert not healthy and "no judge host answered" in cap.get()
+
+
+def test_preflight_sidelines_failing_judges_and_falls_back_from_a_dead_second_judge(tmp_path, monkeypatch):
+    import random
+
+    from rich.console import Console
+
+    from data_pipeline import run as run_module
+    from data_pipeline.agents.llm_client import LLMCallError
+    from data_pipeline.endpoints import EndpointPool
+    from data_pipeline.graph import PipelineRuntime
+    from data_pipeline.lessons import LessonsStore
+    from data_pipeline.reputation import JudgeReputation
+
+    def ep(model, host, key="k"):
+        return Endpoint(base_url=f"https://{host}/v1", api_key=key, model=model, name=model)
+
+    bonsai, gemini_a, gemini_b = ep("bonsai", "endpoint"), ep("gemini", "google", "key-a"), ep("gemini", "google", "key-b")
+    cerebras = ep("oss-120b", "cerebras")
+    runtime = PipelineRuntime(
+        analyzer=ep("teacher", "endpoint"), editor=ep("teacher", "endpoint"), reviewer=ep("gpt-oss", "lmstudio"), writers=[ep("teacher", "endpoint")],
+        judge_pool=EndpointPool([bonsai, gemini_a, gemini_b], cooldown_s=0.05), lessons=LessonsStore(tmp_path / "l.json"),
+        reputation=JudgeReputation(tmp_path / "r.json"), judge2=cerebras, judge2_pool=EndpointPool([cerebras]), rng=random.Random(0),
+    )
+    probed = []
+
+    async def fake_call(endpoint, messages, **kw):
+        probed.append((endpoint.model, endpoint.api_key))
+        if endpoint is bonsai:
+            raise LLMCallError("502 bad gateway", retryable=True, endpoint=endpoint, status=502)
+        if endpoint is cerebras:
+            raise LLMCallError("402 payment required", retryable=False, endpoint=endpoint, status=402)
+        return "ok", {"tokens": 1}
+
+    monkeypatch.setattr(run_module, "acall_llm", fake_call)
+    console = Console(width=140, force_terminal=False)
+    with console.capture() as cap:
+        healthy = asyncio.run(run_module.preflight(runtime, console))
+    text = cap.get()
+    assert healthy
+    assert ("gemini", "key-a") in probed and ("gemini", "key-b") in probed          # both Google keys are checked
+    assert runtime.judge_pool.pick() is gemini_a                                     # Bonsai sits out one cooldown after a 502
+    assert runtime.judge2 is None and runtime.judge2_pool is None and "fallback" in text   # a 402 second judge gives way to the pool
+    assert runtime.second_judge(gemini_a.label) is gemini_b
+    assert "wants payment" in run_module.fatal_reason(LLMCallError("402", retryable=False, endpoint=cerebras, status=402))

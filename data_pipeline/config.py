@@ -121,8 +121,10 @@ DEFAULT_JUDGE_ENDPOINTS = ";".join([
 ])
 JUDGE_ENDPOINTS_SPEC = os.getenv("JUDGE_ENDPOINTS", DEFAULT_JUDGE_ENDPOINTS)
 
-# Second opinion: Cerebras gpt-oss-120b, 5 requests a minute on the free tier.
-JUDGE2_ENDPOINT_SPEC = os.getenv("JUDGE2_ENDPOINT", 'https://api.cerebras.ai/v1|env:CEREBRAS_API_KEY|gpt-oss-120b|{"rpm": 5, "max_tokens": 800, "reasoning_effort": "medium"}')
+# Second judge. Unset, the second opinion comes from another host in the judge list; set it to a
+# dedicated endpoint spec to use one model for every second opinion, for example
+# https://api.cerebras.ai/v1|env:CEREBRAS_API_KEY|gpt-oss-120b|{"rpm": 5, "max_tokens": 800, "reasoning_effort": "medium"}
+JUDGE2_ENDPOINT_SPEC = os.getenv("JUDGE2_ENDPOINT", "")
 # Every sample gets a second judge from a different host by default: an overturned pass is the
 # error that would poison training data. Lower the rates to save calls.
 JUDGE2_SAMPLE_RATE = _float("JUDGE2_SAMPLE_RATE", 1.0)        # share of first-judge passes re-judged
