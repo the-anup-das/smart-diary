@@ -267,6 +267,7 @@ def test_key_sequences_are_decoded_per_platform():
     assert decode_posix("\x1b[A") == "up" and decode_posix("\x1b[B") == "down"
     assert decode_posix("\x1b[6~") == "pgdn" and decode_posix("\x1b[H") == "home"
     assert decode_posix("q") == "quit" and decode_posix("\x1b[Z") is None
+    assert decode_windows("\x03", "") == "quit" and decode_posix("\x03") == "quit"   # a console that hands Ctrl+C to the reader still stops the run
 
     reader = KeyReader()
     assert not reader.available() or reader.available()            # no terminal under pytest, but it must not raise

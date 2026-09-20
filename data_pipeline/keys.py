@@ -15,7 +15,7 @@ import threading
 # Windows sends a prefix byte and then a code; POSIX sends an escape sequence.
 WINDOWS_CODES = {"H": "up", "P": "down", "I": "pgup", "Q": "pgdn", "G": "home", "O": "end"}
 POSIX_CODES = {"A": "up", "B": "down", "5~": "pgup", "6~": "pgdn", "H": "home", "F": "end", "1~": "home", "4~": "end"}
-PLAIN_KEYS = {"q": "quit", "Q": "quit", "": "quit"}   # Ctrl+C usually reaches the process as a signal; if the console hands it to us instead, stop cleanly
+PLAIN_KEYS = {"q": "quit", "Q": "quit", "\x03": "quit"}   # Ctrl+C usually reaches the process as a signal; if the console hands it to us instead, stop cleanly
 
 
 def decode_windows(prefix: str, code: str) -> str | None:
