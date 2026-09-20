@@ -28,8 +28,16 @@ services:
       - MEM0_DIR=/data/mem0
       - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Local AI defaults; each person can override them in Settings. Start the model with
+      # `docker compose --profile local-ai up -d` (CPU) once the GGUF is in /AppData/notebook/models.
+      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-false}
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://llm-server:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-smart-diary-slm}
+      - LOCAL_LLM_FALLBACK=${LOCAL_LLM_FALLBACK:-true}
+      - LOCAL_LLM_TIMEOUT=${LOCAL_LLM_TIMEOUT:-240}
       - JWT_SECRET=${JWT_SECRET}
       # STT: remove or leave blank to disable the voice feature entirely
       - STT_BASE_URL=${STT_BASE_URL:-http://stt-server:8000/v1}
@@ -44,6 +52,29 @@ services:
         condition: service_started
       stt-server:
         condition: service_started
+
+  # Local model on the NAS CPU: llama.cpp's OpenAI-compatible server on the fine-tuned GGUF.
+  # Copy the GGUF to /AppData/notebook/models and set LOCAL_LLM_GGUF to its file name.
+  #   docker compose --profile local-ai up -d
+  llm-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: notebook-llm
+    profiles: ["local-ai"]
+    restart: unless-stopped
+    volumes:
+      - /AppData/notebook/models:/models:ro
+    command: >
+      -m /models/${LOCAL_LLM_GGUF:-smart-diary-slm.Q4_K_M.gguf}
+      --host 0.0.0.0 --port 8080
+      --alias ${LOCAL_LLM_MODEL:-smart-diary-slm}
+      -c ${LOCAL_LLM_CTX:-8192} -np ${LOCAL_LLM_PARALLEL:-2} -t ${LOCAL_LLM_THREADS:-4}
+      --jinja --cache-reuse 256
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 5
 
   db:
     image: postgres:15-alpine

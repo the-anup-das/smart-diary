@@ -133,8 +133,9 @@ MAX_TOKENS_ENTRY = _int("MAX_TOKENS_ENTRY", 900)
 MAX_TOKENS_REVIEW = _int("MAX_TOKENS_REVIEW", 400)
 MAX_TOKENS_ANALYSIS = _int("MAX_TOKENS_ANALYSIS", 2048)
 MAX_TOKENS_JUDGE = _int("MAX_TOKENS_JUDGE", 800)
-REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 120.0)
+REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 240.0)   # a 30B model writing a full analysis can take a while under load
 ENDPOINT_COOLDOWN_S = _float("ENDPOINT_COOLDOWN_S", 90.0)
+MAX_CONSECUTIVE_CRASHES = _int("MAX_CONSECUTIVE_CRASHES", 8)   # stop the run instead of retrying a dead endpoint forever
 
 # Cost per million tokens for the default endpoint; the owner's server is free, so 0 by default.
 LLM_PRICE_IN = _float("LLM_PRICE_IN", 0.0)

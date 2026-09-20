@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
@@ -28,10 +26,19 @@ services:
       # Natively maps Docker PostgreSQL DNS directly to SQLAlchemy
       - DATABASE_URL=postgresql://diary_user:diary_password@db:5432/diary_db
       - JWT_SECRET=super-secret-diary-key-you-should-change
-      # LLM Strategy Toggle: Set to true to route traffic to local SGLang SLM
-      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-false}
-      - LOCAL_LLM_BASE_URL=http://sglang:30000/v1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
+      # Local AI: server-wide defaults. Each person can override them in Settings (Cloud or Local,
+      # server URL, model, cloud fallback). The llm-server profiles below match these defaults.
+      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-false}
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-http://llm-server:8080/v1}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-smart-diary-slm}
+      - LOCAL_LLM_FALLBACK=${LOCAL_LLM_FALLBACK:-true}
+      - LOCAL_LLM_TIMEOUT=${LOCAL_LLM_TIMEOUT:-180}
+      # Embeddings for long-term memory stay on OpenAI unless EMBEDDING_BASE_URL points elsewhere.
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
       # STT: remove or leave blank to disable voice feature entirely
       - STT_BASE_URL=http://stt-server:8000/v1
       - STT_API_KEY=not-needed
@@ -40,26 +47,97 @@ services:
       - db
       - qdrant
       - stt-server
-      # Notice sglang is removed from depends_on because it is now an optional profile
 
-  # Phase 3: SGLang Local Inference Engine (NVIDIA GPU required)
-  # NOTE: This service will ONLY start if you run: docker compose --profile local-ai up -d
-  sglang:
-    image: lmsysorg/sglang:latest
-    container_name: diary-sglang
+  # Local model, CPU: llama.cpp's OpenAI-compatible server on the fine-tuned GGUF.
+  #   docker compose --profile local-ai up -d
+  # The GGUF comes from data_pipeline/scripts/finetune.py --export gguf; set LOCAL_LLM_GGUF to its
+  # path relative to data_pipeline/output. --jinja uses the chat template stored in the file, and
+  # the JSON-schema response format the backend sends is enforced by the server's grammar.
+  llm-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: diary-llm-cpu
     profiles: ["local-ai"]
     restart: unless-stopped
+    networks:
+      default:
+        aliases: [llm-server]
     ports:
-      - "30000:30000"
+      - "8080:8080"
     volumes:
-      # Mount the pipeline output dir into the container
-      - ./data_pipeline/output:/models
+      - ./data_pipeline/output:/models:ro
     command: >
-      python3 -m sglang.launch_server 
-      --model-path /models/model_qwen_q4_k_m/unsloth.Q4_K_M.gguf 
-      --port 30000 
-      --chat-template chatml 
-      --host 0.0.0.0
+      -m /models/${LOCAL_LLM_GGUF:-model_qwen_gguf/unsloth.Q4_K_M.gguf}
+      --host 0.0.0.0 --port 8080
+      --alias ${LOCAL_LLM_MODEL:-smart-diary-slm}
+      -c ${LOCAL_LLM_CTX:-8192} -np 2
+      --jinja --cache-reuse 256
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+
+  # Local model, NVIDIA GPU: the same server with every layer offloaded.
+  #   docker compose --profile local-ai-gpu up -d
+  llm-server-gpu:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: diary-llm-gpu
+    profiles: ["local-ai-gpu"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [llm-server]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data_pipeline/output:/models:ro
+    command: >
+      -m /models/${LOCAL_LLM_GGUF:-model_qwen_gguf/unsloth.Q4_K_M.gguf}
+      --host 0.0.0.0 --port 8080
+      --alias ${LOCAL_LLM_MODEL:-smart-diary-slm}
+      -c ${LOCAL_LLM_CTX:-8192} -np 4 -ngl 99
+      --jinja --cache-reuse 256
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Local model, NVIDIA GPU with vLLM on the merged fp16 export (higher throughput, more VRAM).
+  #   docker compose --profile local-ai-vllm up -d
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: diary-llm-vllm
+    profiles: ["local-ai-vllm"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [llm-server]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data_pipeline/output:/models:ro
+    command: >
+      --model /models/${LOCAL_LLM_MERGED:-model_qwen_merged}
+      --served-model-name ${LOCAL_LLM_MODEL:-smart-diary-slm}
+      --host 0.0.0.0 --port 8080
+      --max-model-len ${LOCAL_LLM_CTX:-8192}
+      --guided-decoding-backend xgrammar
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 5
     deploy:
       resources:
         reservations:

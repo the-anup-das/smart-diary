@@ -163,6 +163,8 @@ class PipelineManager:
         self.total_cost = 0.0
         self.status_counts: dict[str, int] = {}
         self.judge_hosts: dict[str, int] = {}
+        self.consecutive_crashes = 0
+        self.aborted: str | None = None
         self.lock = asyncio.Lock()
         self.file_lock = asyncio.Lock()
 
@@ -187,7 +189,10 @@ class PipelineManager:
             async with self.lock:
                 self.crash_count += 1
                 self.discard_count += 1
+                self.consecutive_crashes += 1
                 self.status_counts["CRASH"] = self.status_counts.get("CRASH", 0) + 1
+                if self.consecutive_crashes >= config.MAX_CONSECUTIVE_CRASHES and not self.aborted:
+                    self.aborted = f"{self.consecutive_crashes} pipelines crashed in a row; the endpoint looks down or overloaded"
             if progress:
                 progress.console.print(f"[bold red]x Pipeline crash:[/bold red] {state['crash_error']}")
             await self._write_outputs(state, None, "CRASH", state["crash_error"])
@@ -210,6 +215,7 @@ class PipelineManager:
             )
 
         async with self.lock:
+            self.consecutive_crashes = 0
             self.total_tokens += state.get("total_tokens", 0)
             self.total_cost += state.get("total_cost", 0.0)
             self.status_counts[final_status] = self.status_counts.get(final_status, 0) + 1
@@ -326,7 +332,7 @@ async def amain() -> None:
     ) as progress:
         task_id = progress.add_task("Distilling", total=args.count, completed=manager.total_approved, stats="")
         pending: set[asyncio.Task] = set()
-        while manager.total_approved < args.count:
+        while manager.total_approved < args.count and not manager.aborted:
             limit = config.CONCURRENCY_CONTROLLER.current
             while len(pending) < limit and manager.total_approved + len(pending) < args.count:
                 pending.add(asyncio.create_task(manager.run_single_pipeline(progress, task_id)))
@@ -336,6 +342,8 @@ async def amain() -> None:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
+    if manager.aborted:
+        console.print(f"[bold red]Run stopped: {manager.aborted}. Fix the endpoint and run the same command to resume.[/bold red]")
     table = Table(title="[bold green]Session summary[/bold green]", border_style="bright_blue")
     table.add_column("Metric", style="bold cyan")
     table.add_column("Value", style="bold")

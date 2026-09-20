@@ -96,6 +96,8 @@ async def acall_llm(
             config.CONCURRENCY_CONTROLLER.decrease()
             last = LLMCallError(f"429 from {ep.label}: {e}", retryable=True, endpoint=ep, status=429)
         except RETRYABLE as e:
+            if isinstance(e, openai.APITimeoutError):
+                config.CONCURRENCY_CONTROLLER.decrease()  # a slow server needs fewer parallel requests, like a rate limit
             status = getattr(e, "status_code", None)
             last = LLMCallError(f"{type(e).__name__} from {ep.label}: {e}", retryable=True, endpoint=ep, status=status)
         except openai.APIStatusError as e:
