@@ -1,32 +1,28 @@
-"""Schema Validator Node (Programmatic - no LLM tokens).
-Validates the Analyzer's JSON output against the strict Pydantic FeedbackReportSchema.
+"""Schema Validator Node (programmatic, no LLM tokens).
+
+Validates the analyzer's JSON against the production FeedbackReportSchema and the shared
+business rules from backend/ai_contracts/analysis.py, so a sample only enters the dataset
+when production would accept it.
 """
 
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
 from pydantic import ValidationError
-from data_pipeline.schemas.feedback_schema import FeedbackReportSchema
+
+from data_pipeline.contracts import FeedbackReportSchema, check_business_rules
+
 
 def validate_schema(data: dict) -> Tuple[bool, Optional[str], Optional[FeedbackReportSchema]]:
-    """
-    Validates a dictionary against FeedbackReportSchema.
-    Returns (is_valid, error_message, validated_schema_instance)
-    """
+    """Returns (is_valid, error_message, validated_instance)."""
     try:
         instance = FeedbackReportSchema.model_validate(data)
-        
-        # Check topic weights sum close to 1.0
-        if instance.topics:
-            total_weight = sum(t.weight for t in instance.topics)
-            if not (0.90 <= total_weight <= 1.10):
-                return False, f"Topic weights sum to {total_weight:.2f}, must be ~1.0", None
-                
-        # Check energy microActions has exactly 3 items
-        if len(instance.energyAnalysis.microActions) != 3:
-            return False, f"microActions count is {len(instance.energyAnalysis.microActions)}, required exactly 3", None
-
-        return True, None, instance
     except ValidationError as ve:
-        error_msg = "; ".join([f"{e['loc']}: {e['msg']}" for e in ve.errors()[:3]])
+        error_msg = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in ve.errors()[:5])
         return False, error_msg, None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, str(e), None
+
+    problems = check_business_rules(instance)
+    if problems:
+        return False, "; ".join(problems), None
+    return True, None, instance
