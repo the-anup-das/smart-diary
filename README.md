@@ -279,24 +279,24 @@ EMBEDDING_MODEL="nomic-embed-text-v1.5"
 
 ---
 
-## ⚡ Self-Hosted Fine-Tuned SLM (SGLang & Distillation)
+## ⚡ Your Own Model (Local AI)
 
-Notebook includes a complete multi-agent synthetic data distillation, QLoRA fine-tuning, and SGLang deployment pipeline in [`data_pipeline/`](./data_pipeline). This allows you to replace commercial cloud APIs with your own private ~3B model (Qwen 2.5, Phi-3.5, or Llama 3.2) specialized for CBT reflection, emotion analysis, and strict JSON schemas.
+Every AI feature can run on a model you host: the fine-tuned 3B model this repository distils, or any OpenAI-compatible server such as llama.cpp, LM Studio, Ollama or vLLM. Pick **Cloud** or **Local** in Settings, enter the server URL and model name, test the connection, and optionally keep the cloud model as a fallback for when the local one fails or returns unusable output. The choice is per person and applies to analysis, chat, weekly reviews, reset scripts and decisions; every analysis records which model produced it, and the cost dashboard prices cloud tokens only.
 
-### 1. Enable Local SGLang Inference
-In your `.env` file:
-```env
-USE_LOCAL_LLM=true
-LOCAL_LLM_BASE_URL=http://sglang:30000/v1
-```
+### Run the bundled server
 
-### 2. Launch Stack with GPU Inference
 ```bash
+# CPU (a NAS is fine); the GGUF comes from the distillation pipeline
 docker compose --profile local-ai up -d
+# NVIDIA GPU
+docker compose --profile local-ai-gpu up -d
 ```
-This runs the full stack with **SGLang** on port `30000` with **RadixAttention** (KV cache reuse) and Guided JSON decoding. When `USE_LOCAL_LLM=true`, all features (Diary Analysis, Chat, Insights, Guided Meditation, Decisions) are served locally with zero external API calls.
 
-See [`data_pipeline/README.md`](./data_pipeline/README.md) for details on generating synthetic datasets, training LoRA adapters with Unsloth, and running model benchmarks.
+Server-wide defaults live in `.env` (`USE_LOCAL_LLM`, `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, `LOCAL_LLM_FALLBACK`); people can still override them in Settings. Long-term memory embeddings stay on the cloud embedder unless `EMBEDDING_BASE_URL` points at a local one; the app says so once in its log.
+
+### Distil the model yourself
+
+[`data_pipeline/`](./data_pipeline) generates synthetic journal entries with a multi-agent pipeline (writer, reviewer, editor, a teacher analyzer on the production prompt, a validator, and an independent judge whose critique repairs and steers later samples), builds deduplicated and stratified splits, fine-tunes a 3B model with Unsloth QLoRA, and scores everything, teacher candidates included, on a 40-entry golden set with pass/fail gates. See [`data_pipeline/README.md`](./data_pipeline/README.md).
 
 ---
 

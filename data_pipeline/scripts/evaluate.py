@@ -1,342 +1,245 @@
-"""Evaluation Benchmarking Script.
-Loads the fine-tuned LoRA models and evaluates them against the test_dataset.jsonl holdout set.
-Supports single-model evaluation and a --compare mode for head-to-head results.
 """
+Evaluate a model on the production analysis task.
+
+Backends:
+  endpoint  any OpenAI-compatible server, called through the same structured-output ladder as the
+            pipeline, with the production prompt. This is how a served GGUF, a teacher candidate on
+            the private endpoint, or a cloud model is scored.
+  unsloth   local HF weights (base or fine-tuned adapter) with greedy decoding on a GPU.
+
+Datasets:
+  golden    eval/golden_set.jsonl, hand-written entries with expected key fields.
+  test      output/test_dataset.jsonl, held out from training; the reference is the teacher's analysis.
+
+    python scripts/evaluate.py --backend endpoint --base-url http://localhost:8080/v1 --model smart-diary-slm --dataset both --gate
+    python scripts/evaluate.py --backend endpoint --base-url $LLM_BASE_URL --api-key-env LLM_API_KEY --model Ternary-Bonsai-2-27B --dataset golden --label teacher-bonsai
+    python scripts/evaluate.py --backend unsloth --model qwen --dataset both --gate
+"""
+from __future__ import annotations
 
 import argparse
-import os
+import asyncio
+import datetime
 import json
-import re
-import time
-from rich.console import Console
-from rich.table import Table
-from rich.progress import track
-from unsloth import FastLanguageModel
-from unsloth.chat_templates import get_chat_template
-from json_repair import repair_json
-from pydantic import ValidationError
-
+import os
+import random
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from schemas.feedback_schema import FeedbackReportSchema
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from rich.console import Console  # noqa: E402
+from rich.table import Table  # noqa: E402
+
+from data_pipeline import config  # noqa: E402
+from data_pipeline.agents.llm_client import LLMCallError, acall_structured  # noqa: E402
+from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema, analysis_messages  # noqa: E402
+from data_pipeline.endpoints import Endpoint  # noqa: E402
+from data_pipeline.eval.metrics import aggregate, expected_from_analysis, gate, load_thresholds, score_one  # noqa: E402
 
 console = Console()
-
-MODEL_MAP = {
-    "qwen": "unsloth/Qwen2.5-3B-Instruct",
-    "phi": "unsloth/Phi-3.5-mini-instruct",
-    "llama": "unsloth/Llama-3.2-3B-Instruct"
-}
-
-CHAT_TEMPLATE_MAP = {
-    "qwen": "chatml",
-    "phi": "phi-3",
-    "llama": "llama-3.1",
-}
+GOLDEN_PATH = HERE.parent / "eval" / "golden_set.jsonl"
+RESULTS_PATH = config.OUTPUT_DIR / "eval_results.json"
 
 
-def load_test_dataset():
-    dataset_path = os.path.join(os.path.dirname(__file__), "..", "output", "test_dataset.jsonl")
-    if not os.path.exists(dataset_path):
-        console.print("[bold red]Test dataset not found at output/test_dataset.jsonl[/bold red]")
-        sys.exit(1)
-        
-    data = []
-    with open(dataset_path, "r", encoding="utf-8") as f:
+# ---------------------------------------------------------------- datasets
+
+def load_golden(path: Path = GOLDEN_PATH) -> list[dict]:
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                data.append(json.loads(line))
-    return data
+                r = json.loads(line)
+                rows.append({"id": r["id"], "group": r.get("group"), "entry": r["entry"], "persona": r.get("custom_persona") or "", "expected": r["expected"]})
+    return rows
 
 
-def extract_system_entry(sharegpt_item):
-    """Extracts the exact system prompt from the ShareGPT formatted test sample."""
-    for msg in sharegpt_item.get("conversations", []):
-        if msg.get("from") == "system":
-            return msg.get("value")
-    return ""
+def load_test(path: Path | None = None) -> list[dict]:
+    """The held-out split; the teacher's analysis becomes the reference."""
+    path = path or config.TEST_DATASET_PATH
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            convo = {m["from"]: m["value"] for m in r["conversations"]}
+            system = convo.get("system", "")
+            persona = ""
+            marker = "USER'S CUSTOM INSTRUCTIONS: "
+            if marker in system:
+                persona = system.split(marker, 1)[1].strip()
+            analysis = json.loads(convo["gpt"])
+            rows.append({"id": r.get("id"), "group": "test", "entry": convo["human"], "persona": persona, "expected": expected_from_analysis(analysis), "reference": analysis})
+    return rows
 
 
-def extract_user_entry(sharegpt_item):
-    """Extracts the human's entry from the ShareGPT formatted test sample."""
-    for msg in sharegpt_item.get("conversations", []):
-        if msg.get("from") == "human":
-            return msg.get("value")
-    return ""
+def select(rows: list[dict], limit: int | None, seed: int) -> list[dict]:
+    if not limit or limit >= len(rows):
+        return rows
+    rng = random.Random(seed)
+    return rng.sample(rows, limit)
 
 
-def extract_ground_truth(sharegpt_item):
-    """Extracts the teacher's ground truth JSON from the ShareGPT test sample."""
-    for msg in sharegpt_item.get("conversations", []):
-        if msg.get("from") == "gpt":
-            text = msg.get("value", "")
-            # Extract JSON after </thought> tag
-            if "</thought>" in text:
-                json_part = text.split("</thought>")[-1].strip()
-            else:
-                json_part = text.strip()
+# ---------------------------------------------------------------- backends
+
+async def run_endpoint(rows: list[dict], ep: Endpoint, concurrency: int, temperature: float = 0.2) -> list[dict]:
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(row: dict) -> dict:
+        async with sem:
+            started = time.monotonic()
             try:
-                return json.loads(repair_json(json_part))
-            except Exception:
-                return None
-    return None
+                result = await acall_structured(ep, analysis_messages(row["entry"], row["persona"]), FeedbackReportSchema, temperature=temperature, max_tokens=config.MAX_TOKENS_ANALYSIS)
+                latency = time.monotonic() - started
+                return {"id": row["id"], "group": row["group"], "analysis": result.data, "error": result.error, "latency_s": latency, "tokens": result.usage.get("completion_tokens"), "mode": result.mode}
+            except LLMCallError as e:
+                return {"id": row["id"], "group": row["group"], "analysis": None, "error": str(e)[:200], "latency_s": time.monotonic() - started, "tokens": None, "mode": None}
+
+    return await asyncio.gather(*(one(r) for r in rows))
 
 
-def extract_json_from_output(raw_output: str) -> str:
-    """Extracts the JSON portion from a model's raw output which may contain <thought> blocks."""
-    # Case 1: Model followed training format with <thought>...</thought>{json}
-    if "</thought>" in raw_output:
-        json_part = raw_output.split("</thought>")[-1].strip()
-    else:
-        json_part = raw_output.strip()
-    
-    # Case 2: Find the first { to last } in case there's preamble text
-    first_brace = json_part.find("{")
-    last_brace = json_part.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        json_part = json_part[first_brace:last_brace + 1]
-    
-    return json_part
-
-
-def evaluate_model(model_key: str, test_data: list, limit: int, is_base: bool = False) -> dict:
-    """Evaluate a single model (either zero-shot base or fine-tuned LoRA) and return detailed results."""
-    base_model_name = MODEL_MAP[model_key]
-    display_name = f"{model_key}_base" if is_base else f"{model_key}_ft"
-    lora_path = os.path.join(os.path.dirname(__file__), "..", "output", f"lora_{model_key}")
-    
-    if not is_base and not os.path.exists(lora_path):
-        console.print(f"[bold red]LoRA adapter not found at {lora_path}. Skipping {display_name}.[/bold red]")
-        return None
-
-    console.print(f"\nLoading [bold cyan]{display_name.upper()}[/bold cyan]...")
-    
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=base_model_name,
-        max_seq_length=4096,
-        load_in_4bit=True,
-    )
-    
-    if not is_base:
-        model.load_adapter(lora_path)
-        
-    FastLanguageModel.for_inference(model)
-    
-    # Apply the correct chat template for this model
-    tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATE_MAP[model_key])
-
-    samples = test_data[:limit]
-    
-    results = {
-        "model": display_name,
-        "total": len(samples),
-        "valid_json": 0,
-        "valid_schema": 0,
-        "field_accuracy": {},  # Per-field presence tracking
-        "avg_latency_ms": 0,
-        "failures": [],       # Store failure details for debugging
-    }
-
-    # Track which top-level fields are present across all samples
-    expected_fields = list(FeedbackReportSchema.model_fields.keys())
-    field_hits = {f: 0 for f in expected_fields}
-    total_latency = 0
-
-    console.print(f"Evaluating {len(samples)} test samples for [bold cyan]{display_name.upper()}[/bold cyan]...")
-    
-    for idx, item in enumerate(track(samples, description=f"Benchmarking {model_key.upper()}...")):
-        user_input = extract_user_entry(item)
-        system_input = extract_system_entry(item)
-        if not user_input or not system_input:
-            continue
-        
-        messages = [
-            {"role": "system", "content": system_input},
-            {"role": "user", "content": user_input}
-        ]
-        
-        prompt = tokenizer.apply_chat_template(
-            messages, 
-            tokenize=False, 
-            add_generation_prompt=True
-        )
-        
-        inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
-        
-        start_time = time.time()
-        outputs = model.generate(**inputs, max_new_tokens=2048, use_cache=True)
-        latency = (time.time() - start_time) * 1000
-        total_latency += latency
-        
-        # Decode only the NEW tokens (skip the input prompt tokens)
-        input_length = inputs["input_ids"].shape[1]
-        new_tokens = outputs[0][input_length:]
-        response_text = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        
-        json_str = extract_json_from_output(response_text)
-        
-        try:
-            parsed = json.loads(repair_json(json_str))
-            results["valid_json"] += 1
-            
-            # Track per-field presence
-            for field in expected_fields:
-                if field in parsed:
-                    field_hits[field] += 1
-            
-            FeedbackReportSchema.model_validate(parsed)
-            results["valid_schema"] += 1
-        except json.JSONDecodeError as e:
-            results["failures"].append({
-                "sample": idx, "stage": "json_parse", 
-                "error": str(e)[:100], "raw": json_str[:200]
-            })
-        except ValidationError as e:
-            results["valid_json"] += 1  # JSON was valid, schema failed
-            # Count field hits even on schema failure
-            try:
-                parsed_anyway = json.loads(repair_json(json_str))
-                for field in expected_fields:
-                    if field in parsed_anyway:
-                        field_hits[field] += 1
-            except Exception:
-                pass
-            results["failures"].append({
-                "sample": idx, "stage": "schema_validation", 
-                "error": str(e.errors()[0])[:150] if e.errors() else str(e)[:150]
-            })
-        except Exception as e:
-            results["failures"].append({
-                "sample": idx, "stage": "unknown", "error": str(e)[:100]
-            })
-
-    results["avg_latency_ms"] = total_latency / max(1, len(samples))
-    results["field_accuracy"] = {
-        f: round((hits / max(1, results["valid_json"])) * 100, 1) 
-        for f, hits in field_hits.items()
-    }
-    
-    # Cleanup GPU memory for next model
-    del model, tokenizer
+def run_unsloth(rows: list[dict], family: str, adapter: str | None, use_base: bool, max_new_tokens: int = 2048) -> list[dict]:
     import torch
-    torch.cuda.empty_cache()
-    
-    return results
+    from unsloth import FastLanguageModel
+    from unsloth.chat_templates import get_chat_template
+
+    from data_pipeline.agents.llm_client import extract_json_object
+    from data_pipeline.scripts.finetune import BASE_MODELS, CHAT_TEMPLATES, OUTPUT_DIR
+
+    model_name = BASE_MODELS[family] if use_base else (adapter or str(OUTPUT_DIR / f"lora_{family}"))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model, tokenizer = FastLanguageModel.from_pretrained(model_name=model_name, max_seq_length=4096, dtype=None, load_in_4bit=True)
+    tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATES[family])
+    FastLanguageModel.for_inference(model)
+    out = []
+    for row in rows:
+        messages = analysis_messages(row["entry"], row["persona"])
+        inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt").to(device)
+        started = time.monotonic()
+        with torch.no_grad():
+            generated = model.generate(input_ids=inputs, max_new_tokens=max_new_tokens, do_sample=False, temperature=None, top_p=None, use_cache=True)
+        latency = time.monotonic() - started
+        text = tokenizer.decode(generated[0][inputs.shape[-1]:], skip_special_tokens=True)
+        data = extract_json_object(text)
+        out.append({"id": row["id"], "group": row["group"], "analysis": data, "error": None if data else "no JSON object", "latency_s": latency, "tokens": int(generated.shape[-1] - inputs.shape[-1]), "mode": "greedy"})
+    return out
 
 
-def print_single_results(results: dict):
-    """Print a detailed results table for a single model."""
-    table = Table(title=f"Evaluation: {results['model'].upper()}", border_style="bright_blue")
+# ---------------------------------------------------------------- reporting
+
+def score(rows: list[dict], outputs: list[dict]) -> list[dict]:
+    by_id = {o["id"]: o for o in outputs}
+    scored = []
+    for row in rows:
+        o = by_id.get(row["id"], {})
+        s = score_one(o.get("analysis"), row["expected"], latency_s=o.get("latency_s"), tokens=o.get("tokens"), error=o.get("error"))
+        s.update({"id": row["id"], "group": row["group"], "mode": o.get("mode")})
+        scored.append(s)
+    return scored
+
+
+def _fmt(value, pct=False) -> str:
+    if value is None:
+        return "-"
+    return f"{value * 100:.0f}%" if pct else f"{value:.2f}"
+
+
+def print_report(label: str, dataset: str, agg: dict, failures: list[str] | None) -> None:
+    table = Table(title=f"{label} on {dataset} ({agg['count']} entries)", border_style="bright_blue")
     table.add_column("Metric", style="bold cyan")
-    table.add_column("Score", style="bold bright_white")
-    
-    json_acc = (results["valid_json"] / results["total"]) * 100
-    schema_acc = (results["valid_schema"] / results["total"]) * 100
-    
-    table.add_row("Total Evaluated", str(results["total"]))
-    table.add_row("JSON Parse Rate", f"{json_acc:.1f}%")
-    table.add_row("Strict Schema Rate", f"{schema_acc:.1f}%")
-    table.add_row("Avg Latency", f"{results['avg_latency_ms']:.0f}ms")
-    
-    console.print("\n", table)
-
-    # Per-field breakdown
-    field_table = Table(title="Per-Field Presence Rate", border_style="dim")
-    field_table.add_column("Field", style="cyan")
-    field_table.add_column("Hit Rate", style="white")
-    for field, rate in results["field_accuracy"].items():
-        style = "green" if rate >= 95 else "yellow" if rate >= 80 else "red"
-        field_table.add_row(field, f"[{style}]{rate}%[/{style}]")
-    console.print(field_table)
+    table.add_column("Value", style="bold")
+    pct = ("schema_valid_rate", "rules_ok_rate", "enum_valid_rate", "distress_recall", "distress_precision", "distress_accuracy", "rumination_accuracy",
+           "top_topic_accuracy", "topics_in_vocab_rate", "stim_category_accuracy", "fog_accuracy", "short_form_accuracy", "minutes_in_range_rate",
+           "builders_recall", "decision_accuracy", "grammar_in_range_rate", "grammar_fixes_enough_rate", "mood_in_range_rate")
+    for key in ("schema_valid_rate", "rules_ok_rate", "distress_recall", "distress_precision", "mood_mae", "mood_in_range_rate", "rumination_accuracy",
+                "top_topic_accuracy", "topics_in_vocab_rate", "stimulation_load_mae", "stim_category_accuracy", "brain_rot_load_mae", "fog_accuracy",
+                "short_form_accuracy", "minutes_in_range_rate", "builders_recall", "decision_accuracy", "grammar_in_range_rate", "grammar_fixes_enough_rate",
+                "avg_latency_s", "avg_tokens", "failures"):
+        table.add_row(key, _fmt(agg.get(key), pct=key in pct) if key not in ("failures",) else str(agg.get(key)))
+    table.add_row("distress confusion", json.dumps(agg["distress_confusion"]))
+    console.print(table)
+    if failures is not None:
+        hard = [f for f in failures if not f.endswith("no data")]
+        if hard:
+            console.print("[bold red]Gate failed:[/bold red] " + "; ".join(hard))
+        else:
+            console.print("[bold green]Gate passed.[/bold green]" + (f" (no data for: {', '.join(f.split(':')[0] for f in failures)})" if failures else ""))
 
 
-def print_comparison(all_results: list):
-    """Print a head-to-head comparison table."""
-    table = Table(title="🏆 Model Comparison (Head-to-Head)", border_style="bright_green")
-    table.add_column("Metric", style="bold cyan")
-    for r in all_results:
-        table.add_column(r["model"].upper(), style="bold bright_white")
-
-    metrics = [
-        ("Total Evaluated", lambda r: str(r["total"])),
-        ("JSON Parse Rate", lambda r: f"{(r['valid_json'] / r['total']) * 100:.1f}%"),
-        ("Strict Schema Rate", lambda r: f"{(r['valid_schema'] / r['total']) * 100:.1f}%"),
-        ("Avg Latency", lambda r: f"{r['avg_latency_ms']:.0f}ms"),
-    ]
-    
-    for label, fn in metrics:
-        table.add_row(label, *[fn(r) for r in all_results])
-    
-    console.print("\n", table)
-    
-    # Determine winner
-    best = max(all_results, key=lambda r: r["valid_schema"])
-    console.print(f"\n[bold green]🏆 Winner: {best['model'].upper()} with {(best['valid_schema']/best['total'])*100:.1f}% strict schema accuracy![/bold green]")
+def save_results(record: dict) -> None:
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if RESULTS_PATH.exists():
+        try:
+            existing = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+        except ValueError:
+            existing = []
+    existing.append(record)
+    RESULTS_PATH.write_text(json.dumps(existing, indent=1), encoding="utf-8")
 
 
-def save_results(all_results: list):
-    """Save evaluation results to disk for the dashboard."""
-    output_path = os.path.join(os.path.dirname(__file__), "..", "output", "eval_results.json")
-    with open(output_path, "w", encoding="utf-8") as f:
-        # Strip raw failure text for cleaner storage
-        clean = []
-        for r in all_results:
-            c = dict(r)
-            c["failures"] = len(r["failures"])  # Just store count
-            clean.append(c)
-        json.dump(clean, f, indent=2)
-    console.print(f"[dim]Results saved to {output_path}[/dim]")
+# ---------------------------------------------------------------- main
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Evaluate a model on the analysis task with the production prompt")
+    parser.add_argument("--backend", choices=("endpoint", "unsloth"), default="endpoint")
+    parser.add_argument("--base-url")
+    parser.add_argument("--api-key-env", default="LOCAL_LLM_API_KEY", help="env var holding the key for --base-url")
+    parser.add_argument("--model", default="smart-diary-slm", help="served model name, or the family (qwen|llama|phi) for --backend unsloth")
+    parser.add_argument("--adapter", help="unsloth: path to a LoRA adapter (default output/lora_<family>)")
+    parser.add_argument("--base", action="store_true", help="unsloth: evaluate the zero-shot base model")
+    parser.add_argument("--dataset", choices=("golden", "test", "both"), default="golden")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=config.SEED)
+    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--label", default=None)
+    parser.add_argument("--gate", action="store_true", help="exit 1 when thresholds are missed")
+    parser.add_argument("--thresholds", type=Path, default=None)
+    parser.add_argument("--dump", type=Path, default=None, help="write every analysis and score to this JSONL")
+    args = parser.parse_args(argv)
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate Fine-Tuned SLM")
-    parser.add_argument("--model", type=str, choices=["qwen", "phi", "llama"], help="Single model to evaluate")
-    parser.add_argument("--compare", action="store_true", help="Evaluate all 3 models head-to-head")
-    parser.add_argument("--include-base", action="store_true", help="Include zero-shot base models to measure fine-tuning improvement")
-    parser.add_argument("--limit", type=int, default=50, help="Max test samples to evaluate per model")
-    args = parser.parse_args()
-
-    if not args.model and not args.compare:
-        console.print("[bold red]Specify --model <name> or --compare to evaluate.[/bold red]")
-        sys.exit(1)
-
-    test_data = load_test_dataset()
-
-    if args.compare:
-        console.print("[bold bright_white]Running full comparison...[/bold bright_white]")
-        all_results = []
-        for model_key in ["qwen", "phi", "llama"]:
-            if args.include_base:
-                res_base = evaluate_model(model_key, test_data, args.limit, is_base=True)
-                if res_base:
-                    print_single_results(res_base)
-                    all_results.append(res_base)
-                    
-            res_ft = evaluate_model(model_key, test_data, args.limit, is_base=False)
-            if res_ft:
-                print_single_results(res_ft)
-                all_results.append(res_ft)
-        
-        if len(all_results) > 1:
-            print_comparison(all_results)
-            save_results(all_results)
-    else:
-        if args.include_base:
-            res_base = evaluate_model(args.model, test_data, args.limit, is_base=True)
-            if res_base:
-                print_single_results(res_base)
-                
-        res_ft = evaluate_model(args.model, test_data, args.limit, is_base=False)
-        if res_ft:
-            print_single_results(res_ft)
-            
-        # Collect valid results for comparison/saving
-        valid_results = [r for r in [res_base if args.include_base else None, res_ft] if r is not None]
-        if len(valid_results) > 1:
-            print_comparison(valid_results)
-        if valid_results:
-            save_results(valid_results)
+    datasets = ["golden", "test"] if args.dataset == "both" else [args.dataset]
+    label = args.label or (f"{args.model}@{args.base_url}" if args.backend == "endpoint" else f"{args.model}{'-base' if args.base else '-ft'}")
+    thresholds = load_thresholds(args.thresholds)
+    exit_code = 0
+    for name in datasets:
+        rows = load_golden() if name == "golden" else load_test()
+        rows = select(rows, args.limit, args.seed)
+        if args.backend == "endpoint":
+            if not args.base_url:
+                raise SystemExit("--base-url is required for --backend endpoint")
+            key = os.getenv(args.api_key_env) or "empty"
+            ep = Endpoint(base_url=args.base_url.rstrip("/"), api_key=key, model=args.model, name="eval")
+            outputs = asyncio.run(run_endpoint(rows, ep, args.concurrency))
+        else:
+            outputs = run_unsloth(rows, args.model, args.adapter, args.base)
+        scored = score(rows, outputs)
+        agg = aggregate(scored)
+        passed, failures = gate(agg, thresholds) if args.gate else (True, None)
+        print_report(label, name, agg, failures)
+        record = {
+            "label": label, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), "backend": args.backend, "model": args.model,
+            "base_url": args.base_url, "dataset": name, "count": len(rows), "prompt_version": PROMPT_VERSION, "metrics": agg,
+            "gate": {"passed": passed, "failures": failures} if args.gate else None,
+            "worst": [s for s in scored if not s.get("schema_valid") or s.get("distress_correct") is False][:20],
+        }
+        save_results(record)
+        if args.dump:
+            args.dump.parent.mkdir(parents=True, exist_ok=True)
+            with open(args.dump, "a", encoding="utf-8") as f:
+                by_id = {o["id"]: o for o in outputs}
+                for s in scored:
+                    f.write(json.dumps({"label": label, "dataset": name, **s, "analysis": by_id.get(s["id"], {}).get("analysis")}, ensure_ascii=False) + "\n")
+        if args.gate and not passed:
+            exit_code = 1
+    console.print(f"results appended to {RESULTS_PATH}")
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

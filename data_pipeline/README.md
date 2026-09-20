@@ -1,158 +1,159 @@
-# 🧪 SLM Distillation, Fine-Tuning & Deployment Pipeline
+# Distilling a small model for Save & Reflect
 
-An end-to-end, multi-agent synthetic data distillation and fine-tuning pipeline for **Smart Diary**. It replaces expensive frontier cloud API calls (e.g. GPT-4o) with an optimized, privacy-first, self-hosted Small Language Model (SLM) running on SGLang.
-
----
-
-## 🏗️ Architecture: 3-Phase Lifecycle
+This folder produces a small language model (SLM) that runs the app's journal analysis locally,
+on a NAS CPU or a home GPU, with quality checked against the same golden set the cloud model is
+scored on. Everything hangs off one contract, `backend/ai_contracts/analysis.py`: the schema and
+the system prompt that production sends, that the teacher labels with, that the student trains
+on and that the evaluator uses.
 
 ```mermaid
 flowchart LR
-    subgraph Phase1["Phase 1: Synthetic Distillation"]
-        DC["Diversity Controller"] --> W["Writer Agent"]
-        W <--> E["Editor & Reviewer Loop"]
-        E --> A["Teacher Analyzer (Qwen/Gemma)"]
-        A --> SV["Pydantic Validator"]
-        SV --> QE["QE Agent"]
-        QE --> J["Judge Agent"]
-        J --> D[("ShareGPT Dataset")]
+    subgraph gen["1. Generate (run.py)"]
+        W["Writer"] --> R["Reviewer"]
+        R -->|approved| A["Analyzer (teacher)"]
+        R -->|critique| E["Editor"] --> R
+        A --> V["Validator: schema + rules"]
+        V -->|errors fed back| A
+        V --> J["Judge (different model)"]
+        J -->|critique, one repair| A
+        J -->|pass| D[("dataset_raw.jsonl")]
+        J -.->|sample| J2["Second opinion"]
     end
-
-    subgraph Phase2["Phase 2: Unsloth QLoRA"]
-        D --> FT["finetune.py (Qwen / Phi / Llama)"]
-        FT --> GGUF[("4-bit GGUF Export")]
-        FT --> EVAL["evaluate.py (--compare --include-base)"]
-    end
-
-    subgraph Phase3["Phase 3: Production Serving"]
-        GGUF --> SGL["SGLang Server (Port 30000)"]
-        SGL --> BACKEND["FastAPI Backend (USE_LOCAL_LLM=true)"]
-    end
+    D --> S["2. build_splits: dedup, stratify"] --> T["3. finetune (Unsloth QLoRA)"]
+    T --> G[("GGUF + merged fp16")]
+    G --> Serve["4. llama-server / vLLM"]
+    Serve --> Ev["5. evaluate: golden + held-out"]
+    Ev -.->|gate| Serve
 ```
 
----
-
-## ⚡ Quick Start
-
-### 1. Installation
-
-For data generation (runs on CPU or Mac):
-```bash
-cd data_pipeline
-pip install -r requirements.txt
-```
-
-For model fine-tuning (requires an NVIDIA GPU instance, e.g. RunPod, Colab):
-```bash
-cd data_pipeline
-pip install -r requirements-gpu.txt
-```
-
-### 2. Environment Configuration
-
-Copy the example `.env`:
-```bash
-cp .env.example .env
-```
-Configure your credentials in `.env`:
-```env
-LLM_API_KEY="your-openrouter-or-together-key"
-LLM_BASE_URL="https://openrouter.ai/api/v1"
-
-# Models for the multi-agent generation loop
-WRITER_MODEL="qwen/qwen3-30b-a3b-instruct"
-EDITOR_MODEL="qwen/qwen3-30b-a3b-instruct"
-QE_MODEL="qwen/qwen3-30b-a3b-instruct"
-REVIEWER_MODEL="google/gemma-2-9b-it"
-ANALYZER_MODEL="google/gemma-2-9b-it"
-JUDGE_MODEL="google/gemma-2-9b-it"
-```
-
----
-
-## 🚀 Phase 1: Autonomous Data Distillation
-
-Run the asynchronous multi-agent pipeline to generate gold-standard training data:
+## Setup
 
 ```bash
-# Generate 100 approved samples with dynamic AIMD concurrency
-python run.py --count 100 --concurrency auto
-
-# Prioritize edge cases (crisis safety flags, compulsive behaviors, brain fog)
-python run.py --count 50 --force-edge-cases
+python -m venv data_pipeline/.venv && data_pipeline/.venv/Scripts/activate   # or source .../bin/activate
+pip install -r data_pipeline/requirements.txt
+cp data_pipeline/.env.example data_pipeline/.env    # add LLM_API_KEY; never commit it
 ```
 
-### Key Features:
-- **AIMD Dynamic Concurrency:** Automatically scales concurrent workers up on clean API responses and slashes workers by 50% upon HTTP 429 rate limits.
-- **Smart Resume:** Reads existing output files on startup to avoid re-generating or over-producing.
-- **Self-Healing JSON:** Integrated `json-repair` intercepts imperfect JSON from open-source models before validation.
-- **Live Streamlit Dashboard:** Monitor throughput, cost, pass/rejection rates, and inspect rejected samples in real-time:
-  ```bash
-  streamlit run dashboard.py
-  ```
+Run every command from the repository root. The app's root `.env` is loaded first, so the
+Google keys used by the judge overflow are picked up from there.
 
-Output dataset splits are saved to:
-- `output/training_dataset.jsonl` (90% training split)
-- `output/test_dataset.jsonl` (10% holdout test split)
+## Models and roles
 
----
+| Role | Default | Why |
+|---|---|---|
+| Writer, reviewer, editor | `Qwen/Qwen3-30B-A3B-Instruct-2507` on `LLM_BASE_URL` | fast, good prose |
+| Analyzer (teacher) | one fixed model, `ANALYZER_MODEL` | labels keep a single calibration; chosen on the golden set |
+| Judge | `Ternary-Bonsai-2-27B` on `LLM_BASE_URL`, then LM Studio, then Gemini 3.6 Flash | a different family grades the labels; hosts rotate on rate limits or outages |
+| Second opinion | Cerebras `gpt-oss-120b` (optional) | re-judges 10% of passes and 25% of fails, logs disagreements |
 
-## 🎯 Phase 2: Unsloth Fine-Tuning & Multi-Model Shootout
+Every role can live on its own server (`<ROLE>_BASE_URL`, `<ROLE>_API_KEY`, `<ROLE>_MODEL`).
+Judges are a list: `base_url|key|model[|extra_json]` entries separated by `;`, where `key` is
+`env:NAME` or a literal, and `extra_json` holds per-host request parameters (Gemini 3.x needs
+`{"reasoning_effort": "low", "max_tokens": 800}`). Rotate writers by listing several models in
+`WRITER_MODELS`; rotate hosts for the judge, never the analyzer.
 
-Fine-tune candidate 3B-class base models on an NVIDIA GPU environment using Unsloth QLoRA:
+## 1. Generate
 
 ```bash
-# Fine-tune Qwen 2.5 3B Instruct
-python scripts/finetune.py --model qwen --epochs 1
-
-# Fine-tune Phi-3.5 Mini (3.8B) Instruct
-python scripts/finetune.py --model phi --epochs 1
-
-# Fine-tune Llama 3.2 3B Instruct
-python scripts/finetune.py --model llama --epochs 1
+python -m data_pipeline.run --count 1 --dry-run          # one sample end to end, printed, nothing written
+python -m data_pipeline.run --count 5 --concurrency 2    # smoke run
+python -m data_pipeline.run --count 1500 --concurrency auto
+streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
-Each run outputs:
-1. LoRA adapter weights in `output/lora_<model>/`
-2. Merged 4-bit quantized GGUF in `output/model_<model>_q4_k_m/unsloth.Q4_K_M.gguf`
+What happens per sample: a seeded diversity profile (persona, emotion, topic, style, length, an
+edge case for 30% of samples, a custom persona instruction for 15%); the writer drafts, the
+reviewer approves or the editor revises (three rounds at most); the analyzer labels the entry with
+the production prompt; the validator checks the schema and the business rules and feeds errors
+back for a retry; the judge scores grounding, safety, CBT quality, schema semantics and persona
+adherence and either passes, sends one repair request to the analyzer with its critique, or
+discards. Rejection reasons go to `output/lessons.json` and steer later writers and analyzers;
+they never enter the training records.
 
-### Model Evaluation & Baseline Comparison:
+Outputs: `output/dataset_raw.jsonl` (entry, analysis, meta with models, judge scores, prompt
+version), `logs/telemetry.jsonl` (fixed keys), `output/judge_disagreements.jsonl`. Resume by
+running the same command again; the run stops itself after eight consecutive crashes.
 
-Run a scientific head-to-head comparison on the holdout test set to measure strict schema compliance and latency, comparing fine-tuned models against zero-shot baselines:
+Edge cases: acute crisis vs figurative venting, compulsive stimulation, brain fog with stated
+minutes, brain builders, decisions, high and low rumination, a no-signals control, messy grammar,
+and a two-topic split.
+
+## 2. Build the splits
 
 ```bash
-# Compare all 3 models head-to-head including base models (6-way shootout)
-python scripts/evaluate.py --compare --include-base --limit 100
-
-# Benchmark a single fine-tuned model against its zero-shot baseline
-python scripts/evaluate.py --model qwen --include-base --limit 50
+python -m data_pipeline.scripts.build_splits --seed 3407 --test-ratio 0.1
 ```
 
-Results and per-field schema accuracy are printed in a terminal table and saved to `output/eval_results.json`.
+Drops exact and near duplicates (5-word shingles, Jaccard 0.8, within a stratum), splits
+stratified on (edge case, safety flag), writes `training_dataset.jsonl` and `test_dataset.jsonl`
+as ShareGPT conversations whose system turn is the production prompt, plus
+`splits_manifest.json` with hashes, counts and settings.
 
----
-
-## 🚢 Phase 3: Production Inference (SGLang)
-
-### Standalone Server
-Launch the SGLang server locally or on your GPU server:
-```bash
-./scripts/serve_sglang.sh qwen
-```
-This serves an OpenAI-compatible API on `http://localhost:30000/v1` with **RadixAttention** (prompt caching) and Guided JSON decoding.
-
-### Docker Compose Deployment
-The main `docker-compose.yml` includes an opt-in profile for SGLang:
+## 3. Fine-tune (NVIDIA GPU, Linux or WSL)
 
 ```bash
-# Boot the entire stack with local GPU inference:
-docker compose --profile local-ai up -d
+pip install -r data_pipeline/requirements-gpu.txt
+python data_pipeline/scripts/finetune.py --model qwen --epochs 2 --export adapter,merged,gguf --quant q4_k_m,q8_0
 ```
 
-### Full Backend Integration
-Set in your root `.env`:
-```env
-USE_LOCAL_LLM=true
-LOCAL_LLM_BASE_URL=http://localhost:30000/v1
+QLoRA with Unsloth on `Qwen2.5-3B-Instruct` (`--model llama` or `phi` for the alternatives):
+loss on the assistant turn only, a 5% validation split with early stopping, cosine schedule,
+rank 32. Exports the adapter, a merged fp16 checkpoint for vLLM and GGUF files for llama.cpp, and
+writes `output/lora_<model>/manifest.json` with the dataset hash, prompt version, hyperparameters,
+package versions and eval loss.
+
+## 4. Serve
+
+```bash
+./data_pipeline/scripts/serve_llama.sh --gpu                       # llama.cpp, any GGUF under output/
+docker compose --profile local-ai up -d                           # llama.cpp on CPU, in the stack
+docker compose --profile local-ai-gpu up -d                       # llama.cpp with CUDA
+docker compose --profile local-ai-vllm up -d                      # vLLM on the merged export
+python data_pipeline/scripts/smoke_endpoint.py --base-url http://localhost:8080/v1 --model smart-diary-slm
 ```
-When `USE_LOCAL_LLM=true`, all backend features (Diary Analysis, Chat, Insights, Guided Meditations, and Decision Agent) are routed through the local SGLang container with 100% data privacy.
+
+The backend sends a JSON-schema response format; llama.cpp and vLLM enforce it with a grammar,
+LM Studio and Ollama honour it too, and the router downgrades to JSON mode with repair when a
+server rejects it. In the app, pick Cloud or Local in Settings, enter the server URL and model
+name, test the connection, and optionally keep the cloud model as a fallback.
+
+## 5. Evaluate
+
+```bash
+# the served model, exactly as production calls it
+python data_pipeline/scripts/evaluate.py --backend endpoint --base-url http://localhost:8080/v1 --model smart-diary-slm --dataset both --gate
+# teacher candidates on the golden set
+python data_pipeline/scripts/evaluate.py --backend endpoint --base-url $LLM_BASE_URL --api-key-env LLM_API_KEY --model Qwen/Qwen3-30B-A3B-Instruct-2507 --dataset golden --label teacher-qwen
+python data_pipeline/scripts/evaluate.py --backend endpoint --base-url $LLM_BASE_URL --api-key-env LLM_API_KEY --model Ternary-Bonsai-2-27B --dataset golden --label teacher-bonsai
+# local weights on the training box
+python data_pipeline/scripts/evaluate.py --backend unsloth --model qwen --base --dataset golden      # zero-shot baseline
+python data_pipeline/scripts/evaluate.py --backend unsloth --model qwen --dataset both --gate
+# which judge to trust
+python -m data_pipeline.eval.judge_calibration --limit 8
+```
+
+`eval/golden_set.jsonl` holds 40 hand-written entries with expected values: the safety flag,
+mood range, rumination level, top topic, stimulation and brain-rot loads, builders, decision flag,
+grammar. `eval/thresholds.json` is the gate (`--gate` exits 1 when missed): schema validity 98%,
+rules 95%, distress recall 95% and precision 80%, mood MAE 1.0, rumination and top-topic
+accuracy 70%, load MAEs 0.5. Results append to `output/eval_results.json`, so teacher candidates,
+the base model, the fine-tuned weights and the served GGUF sit in one file.
+
+The judge calibration sends correct analyses and deliberately corrupted copies (flipped safety
+flag, topic weights not summing to one, invented minutes, wrong rumination level, two micro
+actions, contradictory mood) to each judge candidate and reports pass rate on the correct ones
+and fail rate on each corruption.
+
+## Order of operations for a new dataset
+
+1. `--dry-run`, then `--count 5`, read the samples.
+2. Score the teacher candidates on the golden set; set `ANALYZER_MODEL` to the winner.
+3. Run the judge calibration; put the winner first in `JUDGE_ENDPOINTS`.
+4. Full run, `build_splits`, `finetune`, `evaluate --gate` on the weights and again on the served GGUF.
+
+## Tests
+
+```bash
+data_pipeline/.venv/Scripts/python.exe -m pytest data_pipeline/tests -q      # pipeline, no network
+cd backend && uv run --no-sync --with pytest python -m pytest tests -q      # contract, router, app
+```

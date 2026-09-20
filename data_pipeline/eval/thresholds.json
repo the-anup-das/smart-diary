@@ -1,0 +1,14 @@
+{
+  "schema_valid_rate": 0.98,
+  "rules_ok_rate": 0.95,
+  "distress_recall": 0.95,
+  "distress_precision": 0.80,
+  "mood_mae": 1.0,
+  "rumination_accuracy": 0.70,
+  "top_topic_accuracy": 0.70,
+  "stimulation_load_mae": 0.5,
+  "brain_rot_load_mae": 0.5,
+  "builders_recall": 0.70,
+  "decision_accuracy": 0.80,
+  "enum_valid_rate": 1.0
+}

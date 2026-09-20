@@ -7,7 +7,7 @@ from ai_contracts import analysis as c
 
 # Pinned on purpose. If this fails you changed the prompt or the schema: bump PROMPT_VERSION,
 # update the hash here, and expect the analysis cache to refill.
-PINNED_PROMPT_SHA256 = "c96a06e8015842beb17ac13a414388f9232b5f5279b8d40943aad10185ac3504"
+PINNED_PROMPT_SHA256 = "a4ea90971aa55cac5eea180cbfd345f0503bf9b3b1ea8f26616ea673a4488230"
 
 
 def _good_report() -> c.FeedbackReportSchema:

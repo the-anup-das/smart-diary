@@ -178,6 +178,7 @@ def _field_guide() -> str:
         f"- energyAnalysis.microActions: exactly {MICRO_ACTIONS_REQUIRED} items, each with a unique id.\n"
         f"- emotionLabels: {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX} words.\n"
         f"- grammarScore: 10 is flawless; a score below {GRAMMAR_FIXES_REQUIRED_BELOW} must come with grammarFixes listing the errors.\n"
+        "- sentiment: one specific feeling word such as Stressed, Anxious, Wistful, Calm, Proud; never 'positive', 'negative' or 'mixed'.\n"
         f"- stimulation.behaviours[].category: one of {join(STIMULATION_CATEGORIES)}; "
         f"timeOfDay: one of {join(TIMES_OF_DAY)}; stimulation.afterState: one of {join(AFTER_STATES)}.\n"
         f"- cognition.builders: any of {join(BUILDERS)}, only when the entry says it happened.\n"
