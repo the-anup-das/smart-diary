@@ -9,6 +9,10 @@ interface UsageStats {
   total_tokens: number
   analysis_count: number
   estimated_cost_usd: number
+  cloud_tokens?: number
+  local_tokens?: number
+  local_analysis_count?: number
+  cost_note?: string
 }
 
 export function UsageDashboard() {
@@ -62,13 +66,13 @@ export function UsageDashboard() {
           icon={<Zap className="w-5 h-5 text-yellow-500" />}
           label="Total Tokens"
           value={stats.total_tokens.toLocaleString()}
-          subtext={`${stats.prompt_tokens.toLocaleString()} in / ${stats.completion_tokens.toLocaleString()} out`}
+          subtext={`${stats.prompt_tokens.toLocaleString()} in / ${stats.completion_tokens.toLocaleString()} out${stats.local_tokens ? ` · ${stats.local_tokens.toLocaleString()} local` : ""}`}
         />
         <UsageCard 
           icon={<Coins className="w-5 h-5 text-emerald-500" />}
           label="Estimated Cost"
           value={`$${stats.estimated_cost_usd.toFixed(4)}`}
-          subtext="Standard analysis rates"
+          subtext={stats.local_tokens ? `cloud only; ${stats.local_tokens.toLocaleString()} local tokens were free` : "Cloud list prices"}
         />
       </div>
 

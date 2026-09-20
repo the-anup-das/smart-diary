@@ -129,23 +129,14 @@ SYSTEM_PROMPT = (
     "reaching out to a person they trust."
 )
 
-from llm_client import get_llm_client, get_model_name
-
-_client: Optional[openai.OpenAI] = None
-
-def _get_client() -> openai.OpenAI:
-    """Lazy client so importing this module never requires an API key (tests, evals)."""
-    global _client
-    if _client is None:
-        _client = get_llm_client()
-    return _client
+from llm_router import LLMRouter, get_router
 
 
 def _strip_html(html: str) -> str:
     return re.sub(r'<[^>]*>?', '', html or "")
 
 
-def build_reset_plan(entry_text: str, energy: Optional[dict] = None, memories: str = "", preferences: Optional[dict] = None) -> tuple[dict, dict]:
+def build_reset_plan(entry_text: str, energy: Optional[dict] = None, memories: str = "", preferences: Optional[dict] = None, router: Optional[LLMRouter] = None) -> tuple[dict, dict]:
     """
     Generate the personalised minute-three script for an entry.
     Pure function (no DB) so it can be evaluated and mocked. Returns (plan, usage).
@@ -174,29 +165,25 @@ def build_reset_plan(entry_text: str, energy: Optional[dict] = None, memories: s
     if custom_persona:
         system_prompt += f"\n\nUSER'S CUSTOM INSTRUCTIONS: {custom_persona}"
 
-    response = _get_client().beta.chat.completions.parse(
-        model=get_model_name(),
-        messages=[
+    result = (router or get_router(preferences)).structured(
+        ResetPlanSchema,
+        [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": entry_text},
         ],
-        response_format=ResetPlanSchema,
         temperature=0.4,
+        max_tokens=1200,
     )
-    parsed = response.choices[0].message.parsed
+    parsed = result.parsed
     plan = parsed.model_dump()
+    plan["model"] = result.provenance
     # The UI paces exactly four visualisation lines and three affirmations; pad or trim defensively.
     plan["visualisation"] = ([l for l in plan.get("visualisation", []) if l] + GENERIC_PLAN["visualisation"])[:4]
     plan["affirmations"] = ([a for a in plan.get("affirmations", []) if a] + GENERIC_PLAN["affirmations"])[:3]
     if plan.get("ruminationType") not in RUMINATION_TYPES:
         plan["ruminationType"] = "mixed"
 
-    usage = {
-        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-        "total_tokens": response.usage.total_tokens if response.usage else 0,
-    }
-    return plan, usage
+    return plan, dict(result.usage)
 
 
 def _safe_memories(user_id: str, text: str) -> str:

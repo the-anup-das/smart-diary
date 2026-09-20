@@ -284,25 +284,19 @@ def test_build_reset_plan_pads_and_normalises(monkeypatch):
         def model_dump(self):
             return {**FAKE_PLAN, "visualisation": ["only one"], "affirmations": [], "ruminationType": "weird"}
 
-    class FakeUsage:
-        prompt_tokens, completion_tokens, total_tokens = 10, 5, 15
+    from llm_router import RouteConfig, StructuredResult
 
-    class FakeResponse:
-        usage = FakeUsage()
-        choices = [type("C", (), {"message": type("M", (), {"parsed": FakeParsed()})()})()]
+    class FakeRouter:
+        route = RouteConfig(provider="cloud", base_url=None, api_key="k", model="fake-model")
 
-    class FakeCompletions:
-        def parse(self, **kwargs):
-            assert kwargs["response_format"] is calm.ResetPlanSchema
-            assert "CONTEXT FROM TODAY'S ANALYSIS" in kwargs["messages"][0]["content"]
-            assert "Within the writer's control: prep" in kwargs["messages"][0]["content"]
-            assert "USER'S CUSTOM INSTRUCTIONS: be brief" in kwargs["messages"][0]["content"]
-            return FakeResponse()
+        def structured(self, schema, messages, **kwargs):
+            assert schema is calm.ResetPlanSchema
+            assert "CONTEXT FROM TODAY'S ANALYSIS" in messages[0]["content"]
+            assert "Within the writer's control: prep" in messages[0]["content"]
+            assert "USER'S CUSTOM INSTRUCTIONS: be brief" in messages[0]["content"]
+            return StructuredResult(FakeParsed(), {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, "cloud", "fake-model")
 
-    class FakeClient:
-        beta = type("B", (), {"chat": type("Ch", (), {"completions": FakeCompletions()})()})()
-
-    monkeypatch.setattr(calm, "_get_client", lambda: FakeClient())
+    monkeypatch.setattr(calm, "get_router", lambda prefs=None: FakeRouter())
     plan, usage = calm.build_reset_plan(
         "text",
         energy={"rumination_level": "high", "controllables": [{"item": "prep"}]},
@@ -311,6 +305,7 @@ def test_build_reset_plan_pads_and_normalises(monkeypatch):
     assert plan["visualisation"][0] == "only one" and len(plan["visualisation"]) == 4
     assert len(plan["affirmations"]) == 3
     assert plan["ruminationType"] == "mixed"
+    assert plan["model"] == {"provider": "cloud", "model": "fake-model", "fallbackUsed": False, "mode": "native"}
     assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 
 

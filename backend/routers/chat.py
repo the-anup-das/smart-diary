@@ -19,14 +19,12 @@ from rate_limit import rate_limit
 import models
 from .auth import verify_session
 from memory_service import search_memories
-import openai
 import json
 import os
 import re
-from llm_client import get_llm_client, get_model_name
+from llm_router import LLMUnavailable, get_router
 
 router = APIRouter()
-client = get_llm_client()
 
 STOPWORDS = {
     "the", "and", "for", "that", "this", "with", "what", "when", "where", "how",
@@ -149,8 +147,12 @@ def chat_with_diary(payload: ChatRequest, user_id: str = Depends(verify_session)
         db.commit()
         db.refresh(convo)
 
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    preferences = (user.preferences if user else None) or {}
+    llm = get_router(preferences)
+
     # 1. Long-term semantic memories (empty string if Qdrant is unavailable)
-    memory_context = search_memories(user_id=user_id, query=question, limit=8)
+    memory_context = search_memories(user_id=user_id, query=question, limit=8, preferences=preferences)
 
     # 2. Grounding excerpts from actual entries
     entries = _retrieve_entries(question, user_id, db)
@@ -197,19 +199,10 @@ def chat_with_diary(payload: ChatRequest, user_id: str = Depends(verify_session)
         reply_parts = []
         yield json.dumps({"conversation_id": convo.id, "sources": sources}) + "\n"
         try:
-            stream = client.chat.completions.create(
-                model=get_model_name(),
-                messages=llm_messages,
-                temperature=0.4,
-                max_tokens=700,
-                stream=True,
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content if chunk.choices else None
-                if delta:
-                    reply_parts.append(delta)
-                    yield delta
-        except Exception as e:
+            for delta in llm.stream(llm_messages, temperature=0.4, max_tokens=700):
+                reply_parts.append(delta)
+                yield delta
+        except (LLMUnavailable, Exception) as e:  # noqa: BLE001
             error_text = "\n\n(The journal couldn't finish answering — please try again.)"
             print(f"[chat] stream failed: {e}")
             reply_parts.append(error_text)

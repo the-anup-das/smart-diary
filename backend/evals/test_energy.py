@@ -22,7 +22,7 @@ mock_prefs = {
 ])
 def test_energy_analysis_quality(diary_text, expected_domain):
     # 1. Run the actual AI analysis logic
-    parsed_output, usage = perform_ai_analysis(diary_text, mock_prefs)
+    parsed_output, usage, _meta = perform_ai_analysis(diary_text, mock_prefs)
     
     # 2. Extract key results for evaluation
     # We'll check if the dominant topic matches our expectation

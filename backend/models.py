@@ -71,9 +71,15 @@ class FeedbackReport(Base):
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     total_tokens = Column(Integer, default=0)
-    
+
+    # Provenance: which model and prompt produced this report. The cache only reuses a report
+    # when both still match, and cost is only estimated for cloud rows.
+    model_provider = Column(String, nullable=True)   # cloud | local
+    model_name = Column(String, nullable=True)
+    prompt_version = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     entry = relationship("JournalEntry", back_populates="feedback")
 
 class OpenLoop(Base):

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 from database import get_db
-from models import Decision
+from models import Decision, User
 from routers.auth import verify_session
 from skills.decision_agent import run_decision_agent
 from memory_service import search_memories
@@ -80,8 +80,9 @@ def run_agent_simulation(decision_id: str, request: AgentSimulationRequest, user
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
         
+    preferences = (db.query(User).filter(User.id == user_id).first() or User()).preferences or {}
     # Search mem0 for long-term memories relevant to this decision topic
-    memories = search_memories(user_id=user_id, query=decision.topic, limit=10)
+    memories = search_memories(user_id=user_id, query=decision.topic, limit=10, preferences=preferences)
     if memories:
         print(f"[Decisions] Injecting {len(memories.splitlines())} memory lines for user {user_id}", flush=True)
     
@@ -90,7 +91,8 @@ def run_agent_simulation(decision_id: str, request: AgentSimulationRequest, user
         detected_decision=decision.topic,
         context=request.context,
         user_input=f"I need help with this decision. Current options: {decision.options}",
-        memories=memories
+        memories=memories,
+        preferences=preferences,
     )
     
     # Parse the clean JSON string into a dict for DB storage

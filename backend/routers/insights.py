@@ -13,11 +13,10 @@ import re
 import builtins  # the endpoint parameter is named `range`, which shadows the built-in
 from wellbeing import WELLBEING_AXES, RUMINATION_TO_CALM, average_axes
 
-from llm_client import get_llm_client, get_model_name
+from llm_router import LLMUnavailable, get_router
 
 router = APIRouter()
 
-_openai_client = get_llm_client()
 
 def _get_date_range(range_str: str):
     """Compute start date based on the range filter."""
@@ -470,19 +469,24 @@ def get_weekly_review(
         text = re.sub(r"<[^>]*>?", "", entry.content or "")[:400]
         digest_lines.append(f"### {day} ({mood}){f' — topics: {topics}' if topics else ''}\n{text}")
 
-    response = _openai_client.beta.chat.completions.parse(
-        model=get_model_name(),
-        messages=[
-            {"role": "system", "content": (
-                "You are a reflective journaling coach writing a weekly review for this user. "
-                "Base everything strictly on their entries below — quote or reference real details. "
-                "Be warm and specific; never invent events that aren't in the text."
-            )},
-            {"role": "user", "content": "My journal entries from the past week:\n\n" + "\n\n".join(digest_lines)},
-        ],
-        response_format=WeeklyReviewSchema,
-    )
-    review = response.choices[0].message.parsed.model_dump()
+    try:
+        result = get_router(prefs).structured(
+            WeeklyReviewSchema,
+            [
+                {"role": "system", "content": (
+                    "You are a reflective journaling coach writing a weekly review for this user. "
+                    "Base everything strictly on their entries below — quote or reference real details. "
+                    "Be warm and specific; never invent events that aren't in the text."
+                )},
+                {"role": "user", "content": "My journal entries from the past week:\n\n" + "\n\n".join(digest_lines)},
+            ],
+            temperature=0.4,
+            max_tokens=1500,
+        )
+    except LLMUnavailable as e:
+        raise HTTPException(status_code=503, detail=f"The AI model is not available right now ({e}).")
+    review = result.parsed.model_dump()
+    review["model"] = result.provenance
 
     prefs["weekly_review_cache"] = {"key": cache_key, "data": review}
     user.preferences = prefs

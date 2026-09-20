@@ -85,14 +85,17 @@ def role_endpoint(role: str, model: str | None = None) -> Endpoint:
 
 
 # ---------------------------------------------------------------- judges
-# First judge: the owner's LM Studio model (a different family from the analyzer), then the
-# Google AI Studio free tier as overflow, one entry per key. Entries whose key is unset are skipped.
+# Judges in order: Bonsai 27B on the owner's endpoint (a different family from the analyzer,
+# fully private), then the owner's LM Studio model, then the Google AI Studio free tier as
+# overflow, one entry per key. Entries whose key is unset are skipped.
+BONSAI_MODEL = os.getenv("BONSAI_MODEL", "Ternary-Bonsai-2-27B")
 LMSTUDIO_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "google/gemma-4-26b-a4b")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 GEMINI_JUDGE_MODEL = os.getenv("GEMINI_JUDGE_MODEL", "gemini-3.6-flash")
 _GEMINI_EXTRA = '{"reasoning_effort": "low", "max_tokens": 800}'
 DEFAULT_JUDGE_ENDPOINTS = ";".join([
+    f"{LLM_BASE_URL}|env:LLM_API_KEY|{BONSAI_MODEL}",
     f"{LMSTUDIO_BASE_URL}|lm-studio|{LMSTUDIO_MODEL}",
     f"{GEMINI_BASE_URL}|env:GOOGLE_API_KEY|{GEMINI_JUDGE_MODEL}|{_GEMINI_EXTRA}",
     f"{GEMINI_BASE_URL}|env:GOOGLE_API_KEY_podcast|{GEMINI_JUDGE_MODEL}|{_GEMINI_EXTRA}",

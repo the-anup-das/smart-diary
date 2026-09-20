@@ -8,22 +8,23 @@ from typing import Literal
 from database import get_db
 import models
 from .auth import verify_session
-import openai
 import os
 import re
 import hashlib
 import threading
 from memory_service import ingest_diary_entry
-from llm_client import get_llm_client, get_model_name
+from llm_router import LLMRouter, LLMUnavailable, get_router, resolve_route
 
 router = APIRouter()
-client = get_llm_client()
-ACTIVE_MODEL = get_model_name()
 
 from ai_contracts.analysis import (  # noqa: F401  (schema names re-exported for existing imports)
     FeedbackReportSchema, EnergyAnalysisSchema, StimulationSignalsSchema, CognitionSignalsSchema,
-    build_analysis_system_prompt, PROMPT_VERSION,
+    build_analysis_system_prompt, check_business_rules, PROMPT_VERSION,
 )
+
+# Entries longer than this are cut before analysis: the local model has a fixed context, and a
+# report on the first 12k characters beats a failed request.
+MAX_ANALYSIS_CHARS = int(os.getenv("MAX_ANALYSIS_CHARS", "12000"))
 
 
 def _tokenize(text: str) -> set[str]:
@@ -55,42 +56,41 @@ def _compute_vocab_stats(user_id: str, current_text: str, current_entry_id: str,
         "total_vocabulary": len(all_vocab)
     }
 
-def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackReportSchema, dict]:
+def perform_ai_analysis(text: str, preferences: dict = {}, router: LLMRouter | None = None) -> tuple[FeedbackReportSchema, dict, dict]:
     """
-    Core AI logic extracted for testing and evaluation.
-    Returns (parsed_data, usage_dict)
+    Core AI logic, extracted for testing and evaluation.
+    Returns (parsed_report, usage, meta) where meta says which model produced it.
+    Raises LLMUnavailable when neither the configured model nor the fallback answered.
     """
+    router = router or get_router(preferences)
     custom_persona = preferences.get("custom_persona_prompt", "")
     system_prompt = build_analysis_system_prompt(custom_persona)
-
-    response = client.beta.chat.completions.parse(
-        model=ACTIVE_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": text
-            }
-        ],
-        response_format=FeedbackReportSchema,
+    result = router.structured(
+        FeedbackReportSchema,
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": text[:MAX_ANALYSIS_CHARS]}],
+        temperature=0.2,
+        max_tokens=2048,
+        rules=check_business_rules,
     )
-    usage = {
-        "prompt_tokens": response.usage.prompt_tokens,
-        "completion_tokens": response.usage.completion_tokens,
-        "total_tokens": response.usage.total_tokens
-    }
-    return response.choices[0].message.parsed, usage
+    if result.rule_problems:
+        print(f"[analyze] accepted with unresolved rule problems: {result.rule_problems}", flush=True)
+    meta = {**result.provenance, "promptVersion": PROMPT_VERSION, "attempts": result.attempts}
+    return result.parsed, result.usage, meta
 
-def _build_response(feedback, cached: bool = False):
+def _build_response(feedback, cached: bool = False, fallback_used: bool = False):
     """Standard response builder for feedback data."""
     return {
         "success": True,
         "cached": cached,
+        "model": {
+            "provider": feedback.model_provider,
+            "name": feedback.model_name,
+            "promptVersion": feedback.prompt_version,
+            "fallbackUsed": fallback_used,
+        },
         "feedback": {
             "id": feedback.id,
+            "model": {"provider": feedback.model_provider, "name": feedback.model_name, "promptVersion": feedback.prompt_version, "fallbackUsed": fallback_used},
             "moodScore": feedback.mood_score,
             "energyData": feedback.energy_data,
             "stimulation": feedback.stimulation_data,
@@ -145,18 +145,26 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
         models.FeedbackReport.journal_entry_id == entry.id
     ).first()
     
-    if existing_feedback and existing_feedback.content_hash == content_hash:
+    # A stored report is reused only when the text, the prompt version and the model all match,
+    # so switching models or changing the prompt re-analyses instead of serving stale output.
+    route = resolve_route(preferences)
+    if (
+        existing_feedback
+        and existing_feedback.content_hash == content_hash
+        and existing_feedback.prompt_version == PROMPT_VERSION
+        and existing_feedback.model_name == route.model
+    ):
         print(f"Cache HIT: returning stored analysis (hash: {content_hash[:12]}...)", flush=True)
         return _build_response(existing_feedback, cached=True)
-    
-    print(f"Cache MISS: calling OpenAI (hash: {content_hash[:12]}...)", flush=True)
+
+    print(f"Cache MISS: asking {route.model} on {route.host} (hash: {content_hash[:12]}...)", flush=True)
     
     # Compute vocabulary stats
     vocab_stats = _compute_vocab_stats(user_id, raw_text, entry.id, db)
     
     try:
-        parsed, usage = perform_ai_analysis(raw_text, preferences)
-        print(f"Parsed analysis successfully: {parsed.sentiment} (Tokens: {usage['total_tokens']})", flush=True)
+        parsed, usage, meta = perform_ai_analysis(raw_text, preferences)
+        print(f"Parsed analysis successfully: {parsed.sentiment} (Tokens: {usage['total_tokens']}, {meta['provider']}/{meta['model']})", flush=True)
         
         # Process Micro-actions persistence
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
@@ -248,7 +256,10 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
             "cognition_data": parsed.cognition.model_dump(),
             "prompt_tokens": usage["prompt_tokens"],
             "completion_tokens": usage["completion_tokens"],
-            "total_tokens": usage["total_tokens"]
+            "total_tokens": usage["total_tokens"],
+            "model_provider": meta["provider"],
+            "model_name": meta["model"],
+            "prompt_version": PROMPT_VERSION,
         }
 
         if existing_feedback:
@@ -288,15 +299,20 @@ def analyze_entry(user_id: str = Depends(verify_session), db: Session = Depends(
         entry_date_str = str(entry.created_at.date()) if entry.created_at else "unknown"
         threading.Thread(
             target=ingest_diary_entry,
-            args=(user_id, raw_text, entry_date_str),
+            args=(user_id, raw_text, entry_date_str, preferences),
             daemon=True
         ).start()
-        
-        return _build_response(feedback)
+
+        return _build_response(feedback, fallback_used=bool(meta.get("fallbackUsed")))
+    except LLMUnavailable as e:
+        print(f"Analysis unavailable: {e}", flush=True)
+        raise HTTPException(status_code=503, detail=f"The AI model is not available right now ({e}). Your entry is saved; try Save & Reflect again in a moment.")
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         print("Analysis Error Traceback:", traceback.format_exc(), flush=True)
-        raise HTTPException(status_code=500, detail=f"OpenAI Exception: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 class DailyIntentionsSchema(BaseModel):
     intentions: list[str] = Field(description="List of 3 journaling prompts.")
@@ -358,13 +374,15 @@ def get_intentions(
         system_instruction += f" Where relevant, weave in these unresolved thoughts/tasks the user has been carrying: {', '.join(loop_texts)}."
 
     try:
-        response = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": system_instruction}],
-            response_format=DailyIntentionsSchema,
-            temperature=0.7
+        result = get_router(prefs).structured(
+            DailyIntentionsSchema,
+            [{"role": "system", "content": system_instruction}],
+            temperature=0.7,
+            max_tokens=400,
         )
-        prompts = response.choices[0].message.parsed.intentions
+        prompts = [p for p in result.parsed.intentions if p][:3]
+        if not prompts:
+            raise ValueError("no prompts returned")
 
         new_prefs = dict(prefs)
         new_prefs[cache_field] = {"date": date_str, "prompts": prompts}
@@ -509,42 +527,49 @@ def get_domain_history(user_id: str = Depends(verify_session), db: Session = Dep
     
     return {"success": True, "history": history}
 
+# Cloud pricing used for the estimate (gpt-4o-mini list prices). Local models cost nothing per token.
+CLOUD_PRICE_IN_PER_M = float(os.getenv("CLOUD_PRICE_IN_PER_M", "0.15"))
+CLOUD_PRICE_OUT_PER_M = float(os.getenv("CLOUD_PRICE_OUT_PER_M", "0.60"))
+
+
 @router.get("/api/user/usage")
 def get_user_usage(user_id: str = Depends(verify_session), db: Session = Depends(get_db)):
-    # Aggregate all feedback reports for this user
-    stats = db.query(
-        func.sum(models.FeedbackReport.prompt_tokens).label("prompt"),
-        func.sum(models.FeedbackReport.completion_tokens).label("completion"),
-        func.sum(models.FeedbackReport.total_tokens).label("total"),
-        func.count(models.FeedbackReport.id).label("count")
-    ).join(models.JournalEntry).filter(
-        models.JournalEntry.user_id == user_id
-    ).first()
-    
-    # Pricing for GPT-4o-mini (as of April 2024)
-    # Input: $0.15 / 1M tokens
-    # Output: $0.60 / 1M tokens
-    # The 3-Minute Reset planner (routers/calm.py) also spends tokens; include them so the dashboard stays honest.
+    def feedback_sums(local: bool):
+        provider_filter = models.FeedbackReport.model_provider == "local" if local else (
+            (models.FeedbackReport.model_provider != "local") | (models.FeedbackReport.model_provider.is_(None))
+        )
+        return db.query(
+            func.sum(models.FeedbackReport.prompt_tokens).label("prompt"),
+            func.sum(models.FeedbackReport.completion_tokens).label("completion"),
+            func.sum(models.FeedbackReport.total_tokens).label("total"),
+            func.count(models.FeedbackReport.id).label("count"),
+        ).join(models.JournalEntry).filter(models.JournalEntry.user_id == user_id, provider_filter).first()
+
+    cloud, local = feedback_sums(False), feedback_sums(True)
+    # The 3-Minute Reset planner also spends tokens; it has no provenance column, so it counts as cloud.
     calm_stats = db.query(
         func.sum(models.CalmSession.prompt_tokens).label("prompt"),
         func.sum(models.CalmSession.completion_tokens).label("completion"),
         func.sum(models.CalmSession.total_tokens).label("total"),
     ).filter(models.CalmSession.user_id == user_id).first()
-    prompt_tokens = (stats.prompt or 0) + (calm_stats.prompt or 0)
-    completion_tokens = (stats.completion or 0) + (calm_stats.completion or 0)
-    total_tokens = (stats.total or 0) + (calm_stats.total or 0)
 
-    input_cost = prompt_tokens * (0.15 / 1_000_000)
-    output_cost = completion_tokens * (0.60 / 1_000_000)
-    total_cost = input_cost + output_cost
-    
+    cloud_prompt = (cloud.prompt or 0) + (calm_stats.prompt or 0)
+    cloud_completion = (cloud.completion or 0) + (calm_stats.completion or 0)
+    cloud_total = (cloud.total or 0) + (calm_stats.total or 0)
+    local_total = local.total or 0
+    total_cost = cloud_prompt * (CLOUD_PRICE_IN_PER_M / 1_000_000) + cloud_completion * (CLOUD_PRICE_OUT_PER_M / 1_000_000)
+
     return {
         "success": True,
         "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "analysis_count": stats.count or 0,
-            "estimated_cost_usd": round(total_cost, 4)
+            "prompt_tokens": cloud_prompt + (local.prompt or 0),
+            "completion_tokens": cloud_completion + (local.completion or 0),
+            "total_tokens": cloud_total + local_total,
+            "cloud_tokens": cloud_total,
+            "local_tokens": local_total,
+            "analysis_count": (cloud.count or 0) + (local.count or 0),
+            "local_analysis_count": local.count or 0,
+            "estimated_cost_usd": round(total_cost, 4),
+            "cost_note": "estimated at cloud list prices for cloud tokens only; local tokens are free",
         }
     }

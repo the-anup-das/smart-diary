@@ -59,6 +59,13 @@ export function FeedbackDashboard({ feedback, preferences = {}, onClose, arrival
     <div className="mt-8 space-y-6 fade-in max-w-4xl mx-auto w-full pb-20 px-2 lg:px-6 relative">
       
       {/* State Dismantling Action */}
+      {feedback.model?.name && (
+        <p className="text-[11px] text-gray-400 px-2 -mb-3" title={feedback.model.promptVersion ? `prompt ${feedback.model.promptVersion}` : undefined}>
+          Analysed by {feedback.model.name}
+          {feedback.model.provider === "local" ? " on your local server" : feedback.model.provider === "cloud" ? " in the cloud" : ""}
+          {feedback.model.fallbackUsed ? ", after the local model failed" : ""}
+        </p>
+      )}
       {onClose && (
         <div className="flex justify-between items-end mb-2">
           <h2 className="text-2xl font-serif font-bold text-gray-900 dark:text-gray-100 px-2">AI Insights</h2>
