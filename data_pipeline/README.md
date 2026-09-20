@@ -93,6 +93,16 @@ down at once. So keep the cap at 2 for a single-GPU endpoint and let `--concurre
 samples queue for the busy host and keep working on the others. The banner prints the cap per
 host, and a sample that waits more than a second for a slot says so on the board.
 
+`HOST_MODELS` says what that limit counts, because one address often fronts several models.
+`host=separate` means each model has its own backend, so the limit applies per model and the
+teacher and the judge run side by side. `host=shared` means one GPU that cannot hold two of them:
+the limit applies to the host, calls for the model already running are batched, and a call for
+another model waits until the host is idle, so the server swaps models between batches instead of
+during them. The default, `mixed`, applies the limit to the host without a switching rule. Getting
+this wrong is expensive in both directions: `shared` on separate backends serialises work that
+could run in parallel, and `mixed` on one shared GPU makes the server swap two 20 GB models on
+every sample.
+
 The board takes keys while it runs: up and down scroll the table one sample, page up and page
 down a screen, home returns to following the oldest samples, and `q` finishes the samples in
 flight and stops without losing them (unlike Ctrl+C, which drops whatever is mid-flight).

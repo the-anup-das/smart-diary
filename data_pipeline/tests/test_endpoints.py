@@ -140,3 +140,68 @@ def test_host_limits_from_env(monkeypatch):
     monkeypatch.setattr(config, "HOST_LIMITS", {"127.0.0.1:1234": 1})
     monkeypatch.setattr(config, "MAX_CONCURRENT_PER_HOST", 2)
     assert config.host_limit("127.0.0.1:1234") == 1 and config.host_limit("api.example.com") == 2
+
+
+def test_one_model_at_a_time_batches_and_switches_without_starving():
+    import asyncio
+
+    from data_pipeline.endpoints import HostLimiter
+
+    async def scenario():
+        limiter = HostLimiter(2, exclusive_model=True)
+        together: list[set[str]] = []
+        running: set[str] = set()
+
+        async def request(model, delay=0.0):
+            await asyncio.sleep(delay)
+            async with limiter.slot(model):
+                running.add(model)
+                together.append(set(running))
+                await asyncio.sleep(0.05)
+                running.discard(model)
+
+        await asyncio.gather(
+            request("teacher"), request("teacher"), request("teacher", 0.01),
+            request("judge", 0.02), request("judge", 0.02),
+        )
+        return together, limiter
+
+    together, limiter = asyncio.run(scenario())
+    assert all(len(models) == 1 for models in together)          # the two models never generate at the same time
+    assert limiter.in_flight == 0 and limiter.switches == 2      # teacher batch, judge batch, teacher again: a swap per batch, not per call
+    assert together[0] == together[1] == {"teacher"} and together[2] == together[3] == {"judge"}   # the newcomer took over instead of starving
+
+
+def test_separate_backends_let_two_models_run_side_by_side():
+    import asyncio
+
+    from data_pipeline.endpoints import host_limiter, reset_host_limiters
+
+    async def scenario():
+        reset_host_limiters()
+        peak = 0
+        running = 0
+
+        async def request(model):
+            nonlocal peak, running
+            limiter = host_limiter(f"api.example.com#{model}", 2, 0.0)   # the key the client builds in "separate" mode
+            async with limiter.slot(model):
+                running += 1
+                peak = max(peak, running)
+                await asyncio.sleep(0.05)
+                running -= 1
+
+        await asyncio.gather(*(request("teacher") for _ in range(2)), *(request("judge") for _ in range(2)))
+        return peak
+
+    assert asyncio.run(scenario()) == 4     # two per model, both models at once
+
+
+def test_host_model_modes_from_env():
+    from data_pipeline import config
+
+    assert config._parse_host_modes("a.example=separate; b.example=shared") == {"a.example": "separate", "b.example": "shared"}
+    assert config._parse_host_modes("") == {}
+    with pytest.raises(SystemExit):
+        config._parse_host_modes("a.example=sometimes")
+    assert config.host_model_mode("unknown.example") == "mixed"

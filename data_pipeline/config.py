@@ -186,9 +186,36 @@ def _parse_host_limits(spec: str) -> dict[str, int]:
 
 HOST_LIMITS = _parse_host_limits(_HOST_LIMITS_SPEC)
 
+# How a host's models share their hardware, which decides what the limit counts:
+#   separate  each model has its own backend (a gateway in front of several instances), so the
+#             limit applies per model and two models run side by side
+#   shared    one GPU too small to hold two of them, so the limit applies to the host and a call
+#             for another model waits for it to drain: the server swaps between batches, not
+#             during them
+#   mixed     the default: the limit applies to the host and models may run together
+#   HOST_MODELS=api.example.com=separate;127.0.0.1:1234=shared
+HOST_MODES = ("separate", "shared", "mixed")
+
+
+def _parse_host_modes(spec: str) -> dict[str, str]:
+    modes: dict[str, str] = {}
+    for part in (p.strip() for p in spec.replace(";", ",").split(",") if p.strip()):
+        host, _, mode = part.partition("=")
+        if not host.strip() or mode.strip() not in HOST_MODES:
+            raise SystemExit(f"HOST_MODELS must look like host=separate or host=shared (one of {HOST_MODES}), got {part!r}")
+        modes[host.strip()] = mode.strip()
+    return modes
+
+
+HOST_MODEL_MODES = _parse_host_modes(os.getenv("HOST_MODELS", ""))
+
 
 def host_limit(host: str) -> int:
     return HOST_LIMITS.get(host, MAX_CONCURRENT_PER_HOST)
+
+
+def host_model_mode(host: str) -> str:
+    return HOST_MODEL_MODES.get(host, HOST_MODEL_MODES.get("*", "mixed"))
 ENDPOINT_COOLDOWN_S = _float("ENDPOINT_COOLDOWN_S", 90.0)
 MAX_CONSECUTIVE_CRASHES = _int("MAX_CONSECUTIVE_CRASHES", 8)   # stop the run instead of retrying a dead endpoint forever
 

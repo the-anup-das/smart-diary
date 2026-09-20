@@ -126,37 +126,66 @@ class RateLimiter:
 
 class HostLimiter:
     """
-    How many requests a single server may be generating at once, plus a pause between starts.
+    How many requests a single server may be generating at once, which model they may be for, and
+    a pause between starts.
 
     A model that fills most of the card can batch only a couple of generations; asking for more
     makes it shift context between them and throughput collapses, so every request slows down
     instead of any finishing. The pause lets the server release the last request's cache before
     the next one claims memory.
+
+    `exclusive_model` is for a host that serves several models from one GPU that cannot hold two
+    of them: requests for the model already running are batched together, a request for a second
+    model waits until the host is idle, and once one is waiting no further request for the current
+    model is admitted, so the host drains and switches instead of starving the newcomer.
     """
 
-    def __init__(self, limit: int, pacing_s: float = 0.0):
+    def __init__(self, limit: int, pacing_s: float = 0.0, exclusive_model: bool = False):
         self.limit = max(1, int(limit))
         self.pacing_s = max(0.0, float(pacing_s))
-        self.semaphore = asyncio.Semaphore(self.limit)
+        self.exclusive_model = bool(exclusive_model)
         self.waiting = 0
+        self.in_flight = 0
+        self.current_model: str | None = None
+        self.last_model: str | None = None      # survives the drain, so a switch is counted once
+        self.switches = 0
+        self._pending_model: str | None = None      # a different model is waiting; drain for it
+        self._condition = asyncio.Condition()
         self._next_start = 0.0
-        self._lock = asyncio.Lock()
+        self._pacing_lock = asyncio.Lock()
 
-    @property
-    def in_flight(self) -> int:
-        return self.limit - self.semaphore._value  # noqa: SLF001
+    def _may_start(self, model: str) -> bool:
+        if self.in_flight >= self.limit:
+            return False
+        if not self.exclusive_model or self.current_model is None or self.current_model == model:
+            # Hold the door for a model that is waiting to take over, so it is not starved.
+            return not (self.exclusive_model and self._pending_model not in (None, model))
+        return self.in_flight == 0
+
+    def blocked_by_model(self, model: str) -> bool:
+        return self.exclusive_model and self.current_model not in (None, model) and self.in_flight > 0
 
     @contextlib.asynccontextmanager
-    async def slot(self):
+    async def slot(self, model: str = ""):
         """Hold a slot on the host for the length of one request."""
-        self.waiting += 1
-        try:
-            await self.semaphore.acquire()
-        finally:
-            self.waiting -= 1
+        async with self._condition:
+            self.waiting += 1
+            try:
+                while not self._may_start(model):
+                    if self.exclusive_model and self.current_model not in (None, model) and self._pending_model is None:
+                        self._pending_model = model
+                    await self._condition.wait()
+            finally:
+                self.waiting -= 1
+            if self.exclusive_model and self.last_model not in (None, model):
+                self.switches += 1
+            self.current_model = self.last_model = model
+            if self._pending_model == model:
+                self._pending_model = None
+            self.in_flight += 1
         try:
             if self.pacing_s:
-                async with self._lock:
+                async with self._pacing_lock:
                     now = time.monotonic()
                     if self._next_start > now:
                         await asyncio.sleep(self._next_start - now)
@@ -164,22 +193,27 @@ class HostLimiter:
                     self._next_start = max(now, self._next_start) + self.pacing_s
             yield self
         finally:
-            self.semaphore.release()
+            async with self._condition:
+                self.in_flight -= 1
+                if self.in_flight == 0 and self._pending_model is not None:
+                    self.current_model = None       # drained: whoever is waiting may take the host
+                self._condition.notify_all()
 
 
 # One limiter per host and event loop: a semaphore belongs to the loop that awaits it.
 _host_limiters: dict[tuple[int, str], HostLimiter] = {}
 
 
-def host_limiter(host: str, limit: int, pacing_s: float = 0.0) -> HostLimiter:
+def host_limiter(host: str, limit: int, pacing_s: float = 0.0, exclusive_model: bool = False) -> HostLimiter:
     try:
         loop_key = id(asyncio.get_running_loop())
     except RuntimeError:
         loop_key = 0
     key = (loop_key, host)
     limiter = _host_limiters.get(key)
-    if limiter is None or limiter.limit != max(1, int(limit)) or limiter.pacing_s != max(0.0, float(pacing_s)):
-        limiter = HostLimiter(limit, pacing_s)
+    settings = (max(1, int(limit)), max(0.0, float(pacing_s)), bool(exclusive_model))
+    if limiter is None or (limiter.limit, limiter.pacing_s, limiter.exclusive_model) != settings:
+        limiter = HostLimiter(limit, pacing_s, exclusive_model)
         _host_limiters[key] = limiter
     return limiter
 

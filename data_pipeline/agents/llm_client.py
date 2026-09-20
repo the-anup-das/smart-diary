@@ -123,15 +123,22 @@ async def acall_llm(
             params.pop(key, None)
 
     client = get_client(ep)
-    limiter = host_limiter(ep.host, config.host_limit(ep.host), config.HOST_PACING_S)
+    mode = config.host_model_mode(ep.host)
+    # Separate backends per model: count per model. One GPU behind them: count per host, and in
+    # "shared" mode let only one model run at a time so the server never holds two of them.
+    limiter_key = f"{ep.host}#{ep.model}" if mode == "separate" else ep.host
+    limiter = host_limiter(limiter_key, config.host_limit(ep.host), config.HOST_PACING_S, mode == "shared")
     last: LLMCallError | None = None
     for attempt in range(max_retries):
         try:
             queued = limiter.waiting
+            swapping = limiter.blocked_by_model(ep.model)
             started = time.monotonic()
-            async with limiter.slot():
-                if queued and time.monotonic() - started > 1.0:
-                    TRACKER.note(f"waited {time.monotonic() - started:.0f}s for a free slot on {ep.host} ({limiter.limit} at a time, {queued} queued)")
+            async with limiter.slot(ep.model):
+                waited = time.monotonic() - started
+                if waited > 1.0 and (queued or swapping):
+                    reason = f"{ep.host} was busy with another model" if swapping else f"{ep.host} takes {limiter.limit} at a time, {queued} queued"
+                    TRACKER.note(f"waited {waited:.0f}s: {reason}")
                 response = await client.chat.completions.create(**_request_kwargs(client, params))
             config.CONCURRENCY_CONTROLLER.increase()
             content = (response.choices[0].message.content or "").strip() if response.choices else ""
