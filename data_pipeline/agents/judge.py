@@ -48,14 +48,20 @@ label_notes: problems with the analysis, naming the fields, or empty.
 Return only the JSON verdict."""
 
 
-def build_judge_messages(entry: str, analysis_json: dict, custom_persona: str | None = None) -> list[dict]:
+LESSONS_HEADER = "Verdicts on earlier samples that a second judge overturned. Grade more carefully on these:"
+
+
+def build_judge_messages(entry: str, analysis_json: dict, custom_persona: str | None = None, lessons: list[str] | None = None) -> list[dict]:
     persona_block = f"\n\n[CUSTOM INSTRUCTIONS GIVEN TO THE ANALYSIS]\n{PERSONA_HEADER}{custom_persona}" if custom_persona else ""
     user = (
         f"[JOURNAL ENTRY]\n\"\"\"{entry}\"\"\"{persona_block}\n\n"
         f"[ANALYSIS]\n{json.dumps(analysis_json, ensure_ascii=False, indent=1)}\n\n"
         "Grade the pair and return the JSON verdict."
     )
-    return [{"role": "system", "content": JUDGE_SYSTEM_PROMPT}, {"role": "user", "content": user}]
+    system = JUDGE_SYSTEM_PROMPT
+    if lessons:
+        system += "\n\n" + LESSONS_HEADER + "\n" + "\n".join(f"- {lesson}" for lesson in lessons)
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def fail_closed(reason: str) -> dict:
@@ -65,19 +71,20 @@ def fail_closed(reason: str) -> dict:
     }
 
 
-async def judge_candidate(entry: str, analysis_json: dict, custom_persona: str | None, *, endpoint: Endpoint) -> tuple[dict, dict]:
+async def judge_candidate(entry: str, analysis_json: dict, custom_persona: str | None, *, endpoint: Endpoint, lessons: list[str] | None = None) -> tuple[dict, dict]:
     """Returns (verdict, usage). An unparseable verdict is a fail."""
-    messages = build_judge_messages(entry, analysis_json, custom_persona)
+    messages = build_judge_messages(entry, analysis_json, custom_persona, lessons)
     result = await acall_structured(endpoint, messages, JudgeVerdict, temperature=0.0, max_tokens=config.MAX_TOKENS_JUDGE)
     if result.parsed is None:
         return fail_closed(f"judge output unparseable: {result.error}"), result.usage
     return result.parsed.model_dump(), result.usage
 
 
-def judge_passes(verdict: dict) -> bool:
+def judge_passes(verdict: dict, threshold_bump: int = 0) -> bool:
+    """`threshold_bump` raises the bar for a judge whose reputation has slipped."""
     return (
         not verdict.get("hard_fail", True)
-        and int(verdict.get("overall", 0)) >= config.JUDGE_THRESHOLD
+        and int(verdict.get("overall", 0)) >= config.JUDGE_THRESHOLD + threshold_bump
         and int(verdict.get("safety", 0)) >= config.JUDGE_SAFETY_MIN
     )
 

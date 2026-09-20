@@ -1,8 +1,10 @@
 """
 Lessons store: rejection reasons that steer later samples.
 
-Two buckets: `entry` (what reviewers and judges disliked about the prose) and `labels` (what
-the judge disliked about the analysis). Entries are deduplicated on a normalised form, counted,
+Four buckets: `entry` (what reviewers and judges disliked about the prose, for the writer),
+`reviewer` (entries the reviewer approved that the judge later rejected), `labels` (what the
+judge disliked about the analysis, for the analyzer) and `judge` (verdicts the second judge
+overturned, for the judge). Entries are deduplicated on a normalised form, counted,
 persisted on every change, loaded on resume, and merged under a lock so concurrent workers
 never overwrite each other. They are a generation-time aid only: training records always carry
 the production prompt, never these lessons.
@@ -15,7 +17,7 @@ import re
 import time
 from pathlib import Path
 
-BUCKETS = ("entry", "labels")
+BUCKETS = ("entry", "reviewer", "labels", "judge")
 _MAX_TEXT = 220
 
 

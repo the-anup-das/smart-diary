@@ -1,13 +1,19 @@
 """
 LangGraph workflow for one sample.
 
-    writer -> reviewer -(approved)-> analyzer -> validator -(valid)-> judge -(pass)-> [second opinion] -> END
-                 |                       ^            |                 |
-                 +-> editor (loop) ------+<-----------+ (schema retry)  +-> analyzer (one repair with the critique)
+    writer -> reviewer -(approved)-> analyzer -> validator -(valid)-> judge -(pass)-> second judge -> END
+                ^  |                    ^            |                 |
+                |  +-> editor (3 rounds)+<-----------+ (schema retry)  +-> analyzer (label repair, once)
+                +---------------------------------------------------------+-> editor (entry repair, once)
 
 Terminal statuses: PASSED, FAILED_REVIEW, FAILED_SCHEMA, FAILED_JUDGE, FAILED_JUDGE2.
-The judge's critique feeds one repair attempt and the shared lessons store, so later samples
-improve; the lessons never enter the training records.
+
+The judge's critique goes back to the agent that can fix it: entry problems to the writer
+(through the editor and the reviewer), label problems to the analyzer, each once. Its notes feed
+the lessons store for the writer, the reviewer and the analyzer. A second judge on a different
+host re-judges the sample; a fail from either judge is a fail, and the first judge's reputation
+moves with the agreement, which reorders the judge hosts, feeds the judge's own lessons and
+raises the bar for a judge that keeps being overturned.
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ from data_pipeline.agents.schema_validator import validate_schema
 from data_pipeline.agents.writer import generate_journal_entry
 from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.lessons import LessonsStore
+from data_pipeline.reputation import JudgeReputation
 
 FINAL_STATUSES = ("PASSED", "FAILED_REVIEW", "FAILED_SCHEMA", "FAILED_JUDGE", "FAILED_JUDGE2")
 
@@ -48,12 +55,17 @@ class PipelineState(TypedDict, total=False):
     schema_retry_count: int
     judge_verdict: dict
     judge_retry_count: int
+    entry_repair_count: int
     judge_host: str
     judge_model: str
+    judge_label: str
+    judge_bump: int
+    first_judge_passed: bool
     needs_judge2: bool
     judge2_verdict: dict
     judge2_host: str
     judge2_model: str
+    judge2_passed: Optional[bool]
     final_status: str
     discard_reason: Optional[str]
     total_tokens: int
@@ -63,14 +75,15 @@ class PipelineState(TypedDict, total=False):
 
 @dataclass
 class PipelineRuntime:
-    """Everything the nodes need that is not sample state: endpoints, judge pools, the lessons store."""
+    """Everything the nodes need that is not sample state: endpoints, judge pools, lessons, reputation."""
     analyzer: Endpoint
     editor: Endpoint
     reviewer: Endpoint
     writers: list[Endpoint]
     judge_pool: EndpointPool
     lessons: LessonsStore
-    judge2: Optional[Endpoint] = None
+    reputation: JudgeReputation = field(default_factory=lambda: JudgeReputation(None))
+    judge2: Optional[Endpoint] = None          # explicit second judge; otherwise another host from the pool
     judge2_pool: Optional[EndpointPool] = None
     judge2_enabled: bool = True
     rng: random.Random = field(default_factory=lambda: random.Random(config.SEED))
@@ -88,8 +101,21 @@ class PipelineRuntime:
                 return others[0]
         return self.reviewer
 
-    def wants_judge2(self, passed: bool) -> bool:
-        if not (self.judge2 and self.judge2_enabled):
+    def order_judges(self) -> None:
+        self.judge_pool.set_order(self.reputation.ordered([ep.label for ep in self.judge_pool.endpoints]))
+
+    def endpoint_by_label(self, label: str) -> Optional[Endpoint]:
+        return next((ep for ep in self.judge_pool.endpoints if ep.label == label), None)
+
+    def second_judge(self, first_label: str) -> Optional[Endpoint]:
+        """The explicit second judge, or another host from the pool; None when there is no other host."""
+        if self.judge2 is not None:
+            return self.judge2
+        first = self.endpoint_by_label(first_label)
+        return self.judge_pool.pick(exclude={first} if first else None)
+
+    def wants_judge2(self, passed: bool, first_label: str) -> bool:
+        if not self.judge2_enabled or self.second_judge(first_label) is None:
             return False
         rate = config.JUDGE2_SAMPLE_RATE if passed else config.JUDGE2_FAIL_SAMPLE_RATE
         return self.rng.random() < rate
@@ -103,7 +129,7 @@ def _acc(state: PipelineState, usage: dict) -> dict:
     }
 
 
-async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: dict, persona: Optional[str]) -> tuple[dict, dict, Endpoint]:
+async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: dict, persona: Optional[str], lessons: list[str] | None = None) -> tuple[dict, dict, Endpoint]:
     """Try judge endpoints in order; a failing host cools down and the next one is used."""
     tried: set[Endpoint] = set()
     for _round in range(2):
@@ -113,7 +139,7 @@ async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: d
                 break
             try:
                 await runtime.judge_pool.throttle(ep)
-                verdict, usage = await judge_candidate(entry, analysis_json, persona, endpoint=ep)
+                verdict, usage = await judge_candidate(entry, analysis_json, persona, endpoint=ep, lessons=lessons)
                 return verdict, usage, ep
             except LLMCallError:
                 runtime.judge_pool.penalise(ep)
@@ -126,6 +152,21 @@ async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: d
     raise LLMCallError("all judge endpoints are unavailable", retryable=True)
 
 
+async def _log_disagreement(runtime: PipelineRuntime, state: PipelineState, ep: Endpoint, verdict: dict, first_passed: bool, second_passed: bool) -> None:
+    if not runtime.disagreements_path:
+        return
+    row = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "first": {"model": state.get("judge_model"), "host": state.get("judge_host"), "passed": first_passed, "verdict": state.get("judge_verdict")},
+        "second": {"model": ep.model, "host": ep.host, "passed": second_passed, "verdict": verdict},
+        "entry": state["entry"], "analysis": state["analysis_json"],
+    }
+    async with runtime.file_lock:
+        runtime.disagreements_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(runtime.disagreements_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def build_pipeline_graph(runtime: PipelineRuntime):
     async def writer_node(state: PipelineState) -> dict:
         ep = runtime.writer_endpoint(state.get("batch_index", 0))
@@ -134,7 +175,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
 
     async def reviewer_node(state: PipelineState) -> dict:
         ep = runtime.reviewer_endpoint(state.get("writer_model", ""))
-        review, usage = await review_journal_entry(state["entry"], state["profile"], endpoint=ep)
+        review, usage = await review_journal_entry(state["entry"], state["profile"], endpoint=ep, lessons=runtime.lessons.top("reviewer"))
         if not review.get("approved"):
             await runtime.lessons.add("entry", review.get("critique", ""))
         return {"review": review, **_acc(state, usage)}
@@ -168,16 +209,36 @@ def build_pipeline_graph(runtime: PipelineRuntime):
 
     async def judge_node(state: PipelineState) -> dict:
         persona = state["profile"].get("custom_persona_prompt")
-        verdict, usage, ep = await judge_with_pool(runtime, state["entry"], state["analysis_json"], persona)
-        passed = judge_passes(verdict)
-        updates: dict[str, Any] = {"judge_verdict": verdict, "judge_host": ep.host, "judge_model": ep.model, "needs_judge2": False, **_acc(state, usage)}
+        runtime.order_judges()
+        verdict, usage, ep = await judge_with_pool(runtime, state["entry"], state["analysis_json"], persona, lessons=runtime.lessons.top("judge"))
+        bump = runtime.reputation.threshold_bump(ep.label)
+        passed = judge_passes(verdict, bump)
+        updates: dict[str, Any] = {
+            "judge_verdict": verdict, "judge_host": ep.host, "judge_model": ep.model, "judge_label": ep.label, "judge_bump": bump,
+            "first_judge_passed": passed, "needs_judge2": False, **_acc(state, usage),
+        }
         if passed:
-            updates.update({"final_status": "PASSED", "discard_reason": None, "needs_judge2": runtime.wants_judge2(True)})
+            updates.update({"final_status": "PASSED", "discard_reason": None, "needs_judge2": runtime.wants_judge2(True, ep.label)})
             return updates
+
         reason = judge_reason(verdict)
-        await runtime.lessons.add("labels", verdict.get("label_notes") or reason)
-        if verdict.get("entry_notes"):
-            await runtime.lessons.add("entry", verdict["entry_notes"])
+        entry_notes = (verdict.get("entry_notes") or "").strip()
+        label_notes = (verdict.get("label_notes") or "").strip()
+        if label_notes or not entry_notes:
+            await runtime.lessons.add("labels", label_notes or reason)
+        if entry_notes:
+            await runtime.lessons.add("entry", entry_notes)
+            await runtime.lessons.add("reviewer", entry_notes)
+
+        if entry_notes and state.get("entry_repair_count", 0) < config.MAX_ENTRY_REPAIR and not verdict.get("unparseable"):
+            # The text is at fault: back to the writer through the editor and the reviewer, then a fresh analysis.
+            updates.update({
+                "entry_repair_count": state.get("entry_repair_count", 0) + 1,
+                "review": {"approved": False, "critique": f"The quality judge faulted the entry: {entry_notes}"},
+                "editor_iteration": 0, "analysis_json": {}, "analysis_error": None, "schema_retry_count": 0,
+                "final_status": "REPAIRING_ENTRY",
+            })
+            return updates
         if state.get("judge_retry_count", 0) < config.MAX_JUDGE_RETRY and not verdict.get("unparseable"):
             updates.update({
                 "judge_retry_count": state.get("judge_retry_count", 0) + 1,
@@ -185,37 +246,36 @@ def build_pipeline_graph(runtime: PipelineRuntime):
                 "final_status": "REPAIRING",
             })
             return updates
-        updates.update({"final_status": "FAILED_JUDGE", "discard_reason": reason, "needs_judge2": runtime.wants_judge2(False)})
+        updates.update({"final_status": "FAILED_JUDGE", "discard_reason": reason, "needs_judge2": runtime.wants_judge2(False, ep.label)})
         return updates
 
     async def judge2_node(state: PipelineState) -> dict:
-        ep = runtime.judge2
-        assert ep is not None
+        first_label = state.get("judge_label", "")
+        ep = runtime.second_judge(first_label)
+        if ep is None:
+            return {"needs_judge2": False}
         persona = state["profile"].get("custom_persona_prompt")
         try:
-            if runtime.judge2_pool:
-                await runtime.judge2_pool.throttle(ep)
-            verdict, usage = await judge_candidate(state["entry"], state["analysis_json"], persona, endpoint=ep)
+            pool = runtime.judge2_pool if (runtime.judge2 is not None and runtime.judge2_pool) else runtime.judge_pool
+            await pool.throttle(ep)
+            verdict, usage = await judge_candidate(state["entry"], state["analysis_json"], persona, endpoint=ep, lessons=runtime.lessons.top("judge"))
         except LLMCallError as e:
-            return {"judge2_verdict": {"skipped": str(e)[:200]}, "judge2_host": ep.host, "judge2_model": ep.model}
-        updates: dict[str, Any] = {"judge2_verdict": verdict, "judge2_host": ep.host, "judge2_model": ep.model, **_acc(state, usage)}
-        first_passed = state.get("final_status") == "PASSED"
-        second_passed = judge_passes(verdict)
-        if first_passed and not second_passed:
-            reason = judge_reason(verdict)
-            updates.update({"final_status": "FAILED_JUDGE2", "discard_reason": f"second opinion: {reason}"})
-            await runtime.lessons.add("labels", verdict.get("label_notes") or reason)
-        if first_passed != second_passed and runtime.disagreements_path:
-            row = {
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "first": {"model": state.get("judge_model"), "host": state.get("judge_host"), "passed": first_passed, "verdict": state.get("judge_verdict")},
-                "second": {"model": ep.model, "host": ep.host, "passed": second_passed, "verdict": verdict},
-                "entry": state["entry"], "analysis": state["analysis_json"],
-            }
-            async with runtime.file_lock:
-                runtime.disagreements_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(runtime.disagreements_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            if runtime.judge2 is None:
+                runtime.judge_pool.penalise(ep)
+            return {"judge2_verdict": {"skipped": str(e)[:200]}, "judge2_host": ep.host, "judge2_model": ep.model, "judge2_passed": None}
+        first_passed = bool(state.get("first_judge_passed"))
+        second_passed = judge_passes(verdict, runtime.reputation.threshold_bump(ep.label))
+        updates: dict[str, Any] = {"judge2_verdict": verdict, "judge2_host": ep.host, "judge2_model": ep.model, "judge2_passed": second_passed, **_acc(state, usage)}
+        await runtime.reputation.record(first_label, first_passed=first_passed, second_passed=second_passed)
+        if first_passed != second_passed:
+            if first_passed:
+                reason = judge_reason(verdict)
+                await runtime.lessons.add("judge", f"You passed an analysis that a second judge failed: {reason}")
+                await runtime.lessons.add("labels", verdict.get("label_notes") or reason)
+                updates.update({"final_status": "FAILED_JUDGE2", "discard_reason": f"second opinion: {reason}"})
+            else:
+                await runtime.lessons.add("judge", f"You failed an analysis that a second judge passed: {judge_reason(state.get('judge_verdict') or {})}")
+            await _log_disagreement(runtime, state, ep, verdict, first_passed, second_passed)
         return updates
 
     def route_after_review(state: PipelineState) -> str:
@@ -233,7 +293,10 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         return "failed_schema"
 
     def route_after_judge(state: PipelineState) -> str:
-        if state.get("final_status") == "REPAIRING":
+        status = state.get("final_status")
+        if status == "REPAIRING_ENTRY":
+            return "editor"
+        if status == "REPAIRING":
             return "analyzer"
         if state.get("needs_judge2"):
             return "judge2"
@@ -252,7 +315,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
     workflow.add_edge("editor", "reviewer")
     workflow.add_edge("analyzer", "schema_validator")
     workflow.add_conditional_edges("schema_validator", route_after_validation, {"judge": "judge", "analyzer": "analyzer", "failed_schema": "failed_schema"})
-    workflow.add_conditional_edges("judge", route_after_judge, {"analyzer": "analyzer", "judge2": "judge2", END: END})
+    workflow.add_conditional_edges("judge", route_after_judge, {"editor": "editor", "analyzer": "analyzer", "judge2": "judge2", END: END})
     workflow.add_edge("judge2", END)
     workflow.add_edge("failed_review", END)
     workflow.add_edge("failed_schema", END)

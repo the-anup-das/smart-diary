@@ -1,4 +1,4 @@
-"""Streamlit dashboard for a generation run: outcomes, judge scores, lessons, and the raw dataset.
+"""Streamlit dashboard for a generation run: one section per agent, judge reputation, lessons, samples.
 
     streamlit run data_pipeline/dashboard.py
 """
@@ -15,10 +15,14 @@ BASE_DIR = Path(__file__).resolve().parent
 TELEMETRY_PATH = BASE_DIR / "logs" / "telemetry.jsonl"
 RAW_PATH = BASE_DIR / "output" / "dataset_raw.jsonl"
 LESSONS_PATH = BASE_DIR / "output" / "lessons.json"
+REPUTATION_PATH = BASE_DIR / "output" / "judge_reputation.json"
+DISAGREEMENTS_PATH = BASE_DIR / "output" / "judge_disagreements.jsonl"
 MANIFEST_PATH = BASE_DIR / "output" / "splits_manifest.json"
 
-COLUMNS = ["timestamp", "status", "editor_iterations", "schema_retries", "judge_retries", "judge_overall", "judge_safety",
-           "judge_model", "judge_host", "judge2_model", "writer_model", "edge_case", "tokens", "calls", "cost", "discard_reason", "error"]
+COLUMNS = ["timestamp", "status", "editor_iterations", "entry_repairs", "schema_retries", "judge_retries", "judge_overall", "judge_safety",
+           "judge_model", "judge_host", "judge_label", "first_judge_passed", "judge2_model", "judge2_host", "judge2_passed", "judge2_overall",
+           "writer_model", "reviewer_model", "reviewer_approved_first", "edge_case", "tokens", "calls", "cost", "discard_reason", "error"]
+NUMERIC = ("tokens", "calls", "cost", "judge_overall", "judge_safety", "judge2_overall", "editor_iterations", "entry_repairs", "schema_retries", "judge_retries")
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -37,16 +41,27 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except ValueError:
+        return {}
+
+
 def load_telemetry() -> pd.DataFrame:
     df = pd.DataFrame(read_jsonl(TELEMETRY_PATH))
     if df.empty:
         return df
     df = df.reindex(columns=COLUMNS)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
-    for col in ("tokens", "calls", "cost", "judge_overall", "judge_safety", "editor_iterations", "schema_retries", "judge_retries"):
+    for col in NUMERIC:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["status"] = df["status"].fillna("UNKNOWN")
     return df
+
+
+def pct(part: float, whole: float) -> str:
+    return f"{part / whole * 100:.0f}%" if whole else "-"
 
 
 df = load_telemetry()
@@ -56,70 +71,113 @@ if df.empty:
 
 total = len(df)
 passed = int((df["status"] == "PASSED").sum())
+finished = df[df["status"] != "CRASH"]
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Attempts", total)
 c2.metric("Approved", passed)
-c3.metric("Pass rate", f"{passed / total * 100:.1f}%")
+c3.metric("Pass rate", pct(passed, total))
 c4.metric("Tokens", f"{int(df['tokens'].sum()):,}")
 c5.metric("Cost", f"${df['cost'].sum():.2f}")
 
+st.markdown("#### Outcomes")
+st.bar_chart(df["status"].value_counts())
+
+# ---------------------------------------------------------------- agents
 st.markdown("---")
-left, right = st.columns(2)
+st.markdown("### Agents")
+a1, a2, a3 = st.columns(3)
 
-with left:
-    st.markdown("#### Outcomes over time")
-    if total > 10:
-        counts = df.set_index("timestamp").groupby([pd.Grouper(freq="15Min"), "status"]).size().unstack(fill_value=0)
-        st.bar_chart(counts)
+with a1:
+    st.markdown("#### Writer")
+    writers = finished.groupby(finished["writer_model"].fillna("-"))
+    st.dataframe(pd.DataFrame({
+        "samples": writers.size(),
+        "pass rate": writers["status"].apply(lambda s: pct((s == "PASSED").sum(), len(s))),
+        "avg tokens": writers["tokens"].mean().round(0),
+    }))
+    st.caption("Writers rotate per batch when WRITER_MODELS lists several models.")
+
+with a2:
+    st.markdown("#### Reviewer and editor")
+    approved_first = finished["reviewer_approved_first"]
+    st.metric("Approved on first review", pct(int(approved_first.fillna(False).astype(bool).sum()), int(approved_first.notna().sum())))
+    st.metric("Rejected after three rounds", int((df["status"] == "FAILED_REVIEW").sum()))
+    st.bar_chart(finished["editor_iterations"].astype(int).value_counts().sort_index().rename("samples by editor rounds"))
+    st.caption(f"Reviewer: {', '.join(finished['reviewer_model'].dropna().unique()) or '-'}")
+
+with a3:
+    st.markdown("#### Analyzer")
+    st.metric("Schema retries per sample", f"{finished['schema_retries'].mean():.2f}")
+    st.metric("Failed validation after retries", int((df["status"] == "FAILED_SCHEMA").sum()))
+    st.metric("Label repairs after a judge fail", int(finished["judge_retries"].sum()))
+    st.metric("Entries rewritten after a judge fail", int(finished["entry_repairs"].sum()))
+
+st.markdown("#### Judge")
+j1, j2 = st.columns(2)
+judged = finished[finished["judge_overall"] > 0]
+with j1:
+    by_host = judged.groupby(judged["judge_label"].fillna(judged["judge_host"]).fillna("-"))
+    st.dataframe(pd.DataFrame({
+        "samples": by_host.size(),
+        "first-judge pass rate": by_host["first_judge_passed"].apply(lambda s: pct(int(s.fillna(False).astype(bool).sum()), len(s))),
+        "mean overall": by_host["judge_overall"].mean().round(2),
+        "mean safety": by_host["judge_safety"].mean().round(2),
+    }))
+    if not judged.empty:
+        st.bar_chart(judged["judge_overall"].astype(int).value_counts().sort_index().rename("overall score"))
+with j2:
+    st.markdown("**Second judge and reputation**")
+    second = finished[finished["judge2_passed"].notna()]
+    if not second.empty:
+        agree = (second["judge2_passed"].astype(bool) == second["first_judge_passed"].fillna(False).astype(bool)).sum()
+        st.metric("Re-judged samples", len(second))
+        st.metric("Agreement with the first judge", pct(int(agree), len(second)))
+        st.metric("Passes overturned", int((second["first_judge_passed"].fillna(False).astype(bool) & ~second["judge2_passed"].astype(bool)).sum()))
     else:
-        st.info("Not enough attempts to chart yet.")
+        st.info("No second-judge verdicts yet.")
+    reputation = read_json(REPUTATION_PATH)
+    if reputation:
+        st.dataframe(pd.DataFrame(reputation).T[["score", "agreed", "overturned_pass", "overturned_fail"]].sort_values("score", ascending=False))
+        st.caption("Agreement +1, overturned pass -3, overturned fail -1. The best-scored host is asked first; a slipping one must award more points to pass a sample.")
+    disagreements = read_jsonl(DISAGREEMENTS_PATH)
+    if disagreements:
+        with st.expander(f"Disagreements ({len(disagreements)})"):
+            for row in disagreements[-5:][::-1]:
+                st.write(f"first {row['first'].get('model')}: {'pass' if row['first'].get('passed') else 'fail'} | second {row['second'].get('model')}: {'pass' if row['second'].get('passed') else 'fail'}")
+                st.caption((row["second"].get("verdict") or {}).get("label_notes") or (row["second"].get("verdict") or {}).get("hard_fail_reason") or "")
 
-with right:
-    st.markdown("#### Judge pass rate per batch of 25 (does the feedback loop help?)")
-    judged = df[df["judge_overall"] > 0].reset_index(drop=True)
-    if len(judged) >= 25:
-        judged["batch"] = judged.index // 25
-        per_batch = judged.groupby("batch").agg(pass_rate=("status", lambda s: (s == "PASSED").mean() * 100), mean_overall=("judge_overall", "mean"))
-        st.line_chart(per_batch)
-    else:
-        st.info("Fewer than 25 judged samples so far.")
+# ---------------------------------------------------------------- learning over time
+st.markdown("---")
+st.markdown("#### Judge pass rate per batch of 25 (is the feedback loop helping?)")
+if len(judged) >= 25:
+    batches = judged.reset_index(drop=True)
+    batches["batch"] = batches.index // 25
+    per_batch = batches.groupby("batch").agg(pass_rate=("status", lambda s: (s == "PASSED").mean() * 100), mean_overall=("judge_overall", "mean"))
+    st.line_chart(per_batch)
+else:
+    st.info("Fewer than 25 judged samples so far.")
 
-left2, right2 = st.columns(2)
-with left2:
-    st.markdown("#### Judge overall score")
-    scored = df[df["judge_overall"] > 0]["judge_overall"]
-    if not scored.empty:
-        st.bar_chart(scored.value_counts().sort_index())
-with right2:
+lessons = read_json(LESSONS_PATH)
+if lessons:
+    st.markdown("#### Lessons the agents are applying")
+    cols = st.columns(4)
+    for col, bucket, who in zip(cols, ("entry", "reviewer", "labels", "judge"), ("writer", "reviewer", "analyzer", "judge")):
+        rows = sorted(lessons.get(bucket, {}).values(), key=lambda r: -r.get("count", 0))[:6]
+        with col:
+            st.markdown(f"**{who}** ({len(lessons.get(bucket, {}))})")
+            for r in rows:
+                st.write(f"- ({r.get('count', 1)}) {r.get('text')}")
+
+failed = df[df["status"] != "PASSED"]
+if not failed.empty:
     st.markdown("#### Rejection reasons (top 8)")
-    failed = df[df["status"] != "PASSED"]
-    if not failed.empty:
-        st.bar_chart(failed["discard_reason"].fillna(failed["error"]).fillna("unknown").str.slice(0, 60).value_counts().head(8))
-    else:
-        st.success("No rejections yet.")
-
-st.markdown("#### Judge hosts and writers")
-h1, h2 = st.columns(2)
-h1.dataframe(df["judge_host"].fillna("-").value_counts().rename("samples"))
-h2.dataframe(df["writer_model"].fillna("-").value_counts().rename("samples"))
-
-if LESSONS_PATH.exists():
-    st.markdown("#### Lessons the pipeline is applying")
-    try:
-        lessons = json.loads(LESSONS_PATH.read_text(encoding="utf-8"))
-        for bucket in ("entry", "labels"):
-            rows = sorted(lessons.get(bucket, {}).values(), key=lambda r: -r.get("count", 0))[:8]
-            if rows:
-                st.markdown(f"**{bucket}**")
-                for r in rows:
-                    st.write(f"- ({r.get('count', 1)}) {r.get('text')}")
-    except ValueError:
-        st.write("lessons.json is not readable")
+    st.bar_chart(failed["discard_reason"].fillna(failed["error"]).fillna("unknown").str.slice(0, 60).value_counts().head(8))
 
 if MANIFEST_PATH.exists():
-    st.markdown("#### Latest splits manifest")
-    st.json(json.loads(MANIFEST_PATH.read_text(encoding="utf-8")))
+    with st.expander("Latest splits manifest"):
+        st.json(read_json(MANIFEST_PATH))
 
+# ---------------------------------------------------------------- samples
 st.markdown("---")
 st.markdown("### Dataset explorer")
 raw = read_jsonl(RAW_PATH)
@@ -128,7 +186,7 @@ with tab1:
     if raw:
         for offset, sample in enumerate(reversed(raw[-5:])):
             meta = sample.get("meta", {})
-            with st.expander(f"Sample {len(raw) - offset}: {meta.get('edge_case') or 'plain'} | judge {meta.get('judge_scores', {}).get('overall')}/10 | {meta.get('writer_model')}"):
+            with st.expander(f"Sample {len(raw) - offset}: {meta.get('edge_case') or 'plain'} | judge {meta.get('judge_scores', {}).get('overall')}/10 via {meta.get('judge_model')} | writer {meta.get('writer_model')}"):
                 st.markdown("**Entry**")
                 st.info(sample.get("entry", ""))
                 st.markdown("**Analysis**")
@@ -138,7 +196,7 @@ with tab1:
     else:
         st.write("No approved samples yet.")
 with tab2:
-    recent = df[df["status"] != "PASSED"].tail(10)
+    recent = failed.tail(10)
     if recent.empty:
         st.write("No rejections to show.")
     for _, row in recent.iloc[::-1].iterrows():

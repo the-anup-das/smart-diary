@@ -31,6 +31,7 @@ TEST_DATASET_PATH = OUTPUT_DIR / "test_dataset.jsonl"
 SPLITS_MANIFEST_PATH = OUTPUT_DIR / "splits_manifest.json"
 LESSONS_PATH = OUTPUT_DIR / "lessons.json"
 JUDGE_DISAGREEMENTS_PATH = OUTPUT_DIR / "judge_disagreements.jsonl"
+JUDGE_REPUTATION_PATH = OUTPUT_DIR / "judge_reputation.json"
 TELEMETRY_LOG_PATH = LOGS_DIR / "telemetry.jsonl"
 REJECTIONS_LOG_PATH = LOGS_DIR / "rejections.log"
 
@@ -104,8 +105,16 @@ JUDGE_ENDPOINTS_SPEC = os.getenv("JUDGE_ENDPOINTS", DEFAULT_JUDGE_ENDPOINTS)
 
 # Second opinion: Cerebras gpt-oss-120b, 5 requests a minute on the free tier.
 JUDGE2_ENDPOINT_SPEC = os.getenv("JUDGE2_ENDPOINT", 'https://api.cerebras.ai/v1|env:CEREBRAS_API_KEY|gpt-oss-120b|{"rpm": 5, "max_tokens": 800}')
-JUDGE2_SAMPLE_RATE = _float("JUDGE2_SAMPLE_RATE", 0.10)        # share of first-judge passes re-judged
-JUDGE2_FAIL_SAMPLE_RATE = _float("JUDGE2_FAIL_SAMPLE_RATE", 0.25)  # share of final fails re-judged, for disagreement logging
+# Every sample gets a second judge from a different host by default: an overturned pass is the
+# error that would poison training data. Lower the rates to save calls.
+JUDGE2_SAMPLE_RATE = _float("JUDGE2_SAMPLE_RATE", 1.0)        # share of first-judge passes re-judged
+JUDGE2_FAIL_SAMPLE_RATE = _float("JUDGE2_FAIL_SAMPLE_RATE", 1.0)  # share of final fails re-judged, for reputation and lessons
+
+# Reputation per judge host: reward on agreement, larger penalties on overturned verdicts.
+JUDGE_REP_AGREE = _int("JUDGE_REP_AGREE", 1)
+JUDGE_REP_OVERTURNED_PASS = _int("JUDGE_REP_OVERTURNED_PASS", -3)
+JUDGE_REP_OVERTURNED_FAIL = _int("JUDGE_REP_OVERTURNED_FAIL", -1)
+JUDGE_REP_STRICT_BELOW = _int("JUDGE_REP_STRICT_BELOW", -5)   # below this score a judge must award more points to pass a sample
 
 JUDGE_THRESHOLD = _int("JUDGE_THRESHOLD", 7)      # overall score needed to pass
 JUDGE_SAFETY_MIN = _int("JUDGE_SAFETY_MIN", 8)    # safety score needed to pass
@@ -125,7 +134,8 @@ PERSONA_PROMPT_RATE = _float("PERSONA_PROMPT_RATE", 0.15)   # production persona
 EDGE_CASE_RATE = _float("EDGE_CASE_RATE", 0.30)
 MAX_EDITOR_ITERATIONS = _int("MAX_EDITOR_ITERATIONS", 3)
 MAX_SCHEMA_RETRY = _int("MAX_SCHEMA_RETRY", 2)
-MAX_JUDGE_RETRY = _int("MAX_JUDGE_RETRY", 1)                # repair once with the judge's critique before discarding
+MAX_JUDGE_RETRY = _int("MAX_JUDGE_RETRY", 1)                # repair the analysis once with the judge's critique before discarding
+MAX_ENTRY_REPAIR = _int("MAX_ENTRY_REPAIR", 1)              # send the entry back to the writer once when the judge faults the text
 LESSONS_MAX = _int("LESSONS_MAX", 8)
 TEST_SPLIT_RATIO = _float("TEST_SPLIT_RATIO", 0.10)
 

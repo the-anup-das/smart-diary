@@ -37,6 +37,7 @@ from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
 from data_pipeline.endpoints import EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
 from data_pipeline.lessons import LessonsStore
+from data_pipeline.reputation import JudgeReputation
 
 def _utf8_console() -> Console:
     """Windows consoles default to a legacy code page; the entries and analyses carry real punctuation."""
@@ -63,7 +64,7 @@ def count_existing_samples(path: Path | None = None) -> int:
         return sum(1 for line in f if line.strip())
 
 
-def format_record(entry: str, analysis: dict, profile: dict, *, models: dict, judge_verdict: dict, judge2_verdict: dict | None = None, judge_retries: int = 0, editor_iterations: int = 0) -> dict:
+def format_record(entry: str, analysis: dict, profile: dict, *, models: dict, judge_verdict: dict, judge2_verdict: dict | None = None, judge_retries: int = 0, editor_iterations: int = 0, entry_repairs: int = 0, judge2_passed: bool | None = None) -> dict:
     """The raw dataset row. `analysis` must already validate against the contract."""
     edge = profile.get("edge_case") or {}
     scores = {k: judge_verdict.get(k) for k in ("grounding", "safety", "cbt_quality", "schema_semantics", "persona_adherence", "overall")}
@@ -85,7 +86,9 @@ def format_record(entry: str, analysis: dict, profile: dict, *, models: dict, ju
             "judge_scores": scores,
             "judge2_scores": {k: judge2_verdict.get(k) for k in ("overall", "safety")} if judge2_verdict and "overall" in judge2_verdict else None,
             "judge_retries": judge_retries,
+            "entry_repairs": entry_repairs,
             "editor_iterations": editor_iterations,
+            "judge2_passed": judge2_passed,
             "entry_sha256": hashlib.sha256(entry.strip().encode("utf-8")).hexdigest(),
             "created_at": _now(),
         },
@@ -105,8 +108,12 @@ def build_runtime(*, lessons_enabled: bool = True, judge2_enabled: bool = True, 
         judge_pool=EndpointPool(judges, cooldown_s=config.ENDPOINT_COOLDOWN_S),
         judge2=judge2,
         judge2_pool=EndpointPool([judge2], cooldown_s=config.ENDPOINT_COOLDOWN_S) if judge2 else None,
-        judge2_enabled=judge2 is not None,
+        judge2_enabled=judge2_enabled,   # an explicit second judge, or another host from the judge list
         lessons=LessonsStore(config.LESSONS_PATH, max_items=config.LESSONS_MAX, enabled=lessons_enabled),
+        reputation=JudgeReputation(
+            config.JUDGE_REPUTATION_PATH, agree=config.JUDGE_REP_AGREE, overturned_pass=config.JUDGE_REP_OVERTURNED_PASS,
+            overturned_fail=config.JUDGE_REP_OVERTURNED_FAIL, strict_below=config.JUDGE_REP_STRICT_BELOW,
+        ),
         rng=random.Random((seed if seed is not None else config.SEED) + 7),
         disagreements_path=config.JUDGE_DISAGREEMENTS_PATH,
     )
@@ -116,7 +123,7 @@ def initial_state(profile: dict, batch_index: int) -> dict:
     return {
         "profile": profile, "batch_index": batch_index, "entry": "", "editor_iteration": 0, "review": {},
         "analysis_json": {}, "analysis_error": None, "schema_retry_count": 0,
-        "judge_verdict": {}, "judge_retry_count": 0, "needs_judge2": False, "judge2_verdict": {},
+        "judge_verdict": {}, "judge_retry_count": 0, "entry_repair_count": 0, "needs_judge2": False, "judge2_verdict": {}, "judge2_passed": None,
         "final_status": "PENDING", "discard_reason": None, "total_tokens": 0, "total_cost": 0.0, "calls": 0,
     }
 
@@ -128,14 +135,22 @@ def telemetry_row(state: dict, final_status: str, reason: str | None) -> dict:
         "timestamp": _now(),
         "status": final_status,
         "editor_iterations": state.get("editor_iteration", 0),
+        "entry_repairs": state.get("entry_repair_count", 0),
         "schema_retries": state.get("schema_retry_count", 0),
         "judge_retries": state.get("judge_retry_count", 0),
         "judge_overall": verdict.get("overall"),
         "judge_safety": verdict.get("safety"),
         "judge_model": state.get("judge_model"),
         "judge_host": state.get("judge_host"),
+        "judge_label": state.get("judge_label"),
+        "first_judge_passed": state.get("first_judge_passed"),
         "judge2_model": state.get("judge2_model"),
+        "judge2_host": state.get("judge2_host"),
+        "judge2_passed": state.get("judge2_passed"),
+        "judge2_overall": (state.get("judge2_verdict") or {}).get("overall"),
         "writer_model": state.get("writer_model"),
+        "reviewer_model": state.get("reviewer_model"),
+        "reviewer_approved_first": (state.get("editor_iteration", 0) == 0 and state.get("entry_repair_count", 0) == 0) if state.get("entry") else None,
         "edge_case": (state.get("profile") or {}).get("edge_case", {}).get("type") if (state.get("profile") or {}).get("edge_case") else None,
         "tokens": state.get("total_tokens", 0),
         "calls": state.get("calls", 0),
@@ -216,6 +231,7 @@ class PipelineManager:
                 },
                 judge_verdict=state.get("judge_verdict") or {}, judge2_verdict=state.get("judge2_verdict") or None,
                 judge_retries=state.get("judge_retry_count", 0), editor_iterations=state.get("editor_iteration", 0),
+                entry_repairs=state.get("entry_repair_count", 0), judge2_passed=state.get("judge2_passed"),
             )
 
         async with self.lock:
@@ -236,7 +252,8 @@ class PipelineManager:
                     progress.console.print(
                         f"  [bold green]+ Sample #{self.total_approved:04d}[/bold green] | mood {analysis.get('moodScore')}/10 ({analysis.get('sentiment')}) "
                         f"| {len(state['entry'].split())} words | {badge} | judge {verdict.get('overall')}/10 via {state.get('judge_host')}"
-                        f"{' | repaired' if state.get('judge_retry_count') else ''}"
+                        f"{' | label repaired' if state.get('judge_retry_count') else ''}{' | entry rewritten' if state.get('entry_repair_count') else ''}"
+                        f"{' | 2nd judge ' + str(state.get('judge2_verdict', {}).get('overall')) + '/10 via ' + str(state.get('judge2_host')) if state.get('judge2_passed') is not None else ''}"
                     )
                     progress.advance(task_id)
             else:
@@ -268,17 +285,26 @@ class PipelineManager:
 
 def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, concurrency: int) -> None:
     judges = ", ".join(ep.label for ep in runtime.judge_pool.endpoints)
-    text = (
-        f"[bold cyan]Adding this run:[/bold cyan] {manager.target_count}   [bold cyan]Already in dataset:[/bold cyan] {manager.total_approved}\n"
-        f"[bold cyan]Writers:[/bold cyan] {', '.join(ep.label for ep in runtime.writers)}\n"
-        f"[bold cyan]Analyzer (teacher):[/bold cyan] {runtime.analyzer.label}\n"
-        f"[bold cyan]Judges:[/bold cyan] {judges}\n"
-        f"[bold cyan]Second opinion:[/bold cyan] {runtime.judge2.label if runtime.judge2 else 'off'}\n"
+    reputation_line = ", ".join(f"{k}: {v['score']}" for k, v in runtime.reputation.snapshot().items()) or "no history yet"
+    if runtime.judge2 is not None:
+        second = runtime.judge2.label
+    elif runtime.judge2_enabled and len(runtime.judge_pool) > 1:
+        second = "another host from the judge list"
+    else:
+        second = "off"
+    lines = [
+        f"[bold cyan]Adding this run:[/bold cyan] {manager.target_count}   [bold cyan]Already in dataset:[/bold cyan] {manager.total_approved}",
+        f"[bold cyan]Writers:[/bold cyan] {', '.join(ep.label for ep in runtime.writers)}",
+        f"[bold cyan]Reviewer:[/bold cyan] {runtime.reviewer.label}   [bold cyan]Editor:[/bold cyan] {runtime.editor.label}",
+        f"[bold cyan]Analyzer (teacher):[/bold cyan] {runtime.analyzer.label}",
+        f"[bold cyan]Judges:[/bold cyan] {judges}",
+        f"[bold cyan]Second judge:[/bold cyan] {second}",
+        f"[bold cyan]Judge reputation:[/bold cyan] {reputation_line}",
         f"[bold cyan]Lessons:[/bold cyan] {'on' if runtime.lessons.enabled else 'off'} ({runtime.lessons.counts()})   "
-        f"[bold cyan]Seed:[/bold cyan] {args.seed}   [bold cyan]Concurrency:[/bold cyan] {concurrency}{' (auto)' if args.concurrency == 'auto' else ''}\n"
-        f"[bold cyan]Prompt version:[/bold cyan] {PROMPT_VERSION}"
-    )
-    console.print(Panel(text, title="[bold green]Distillation run[/bold green]", border_style="bright_blue"))
+        f"[bold cyan]Seed:[/bold cyan] {args.seed}   [bold cyan]Concurrency:[/bold cyan] {concurrency}{' (auto)' if args.concurrency == 'auto' else ''}",
+        f"[bold cyan]Prompt version:[/bold cyan] {PROMPT_VERSION}",
+    ]
+    console.print(Panel("\n".join(lines), title="[bold green]Distillation run[/bold green]", border_style="bright_blue"))
 
 
 async def amain() -> None:
@@ -363,6 +389,7 @@ async def amain() -> None:
     table.add_row("Tokens", f"{manager.total_tokens:,}")
     table.add_row("Cost", f"${manager.total_cost:.2f}")
     table.add_row("Lessons stored", str(runtime.lessons.counts()))
+    table.add_row("Judge reputation", ", ".join(f"{k}: {v['score']} ({v['agreed']} agreed, {v['overturned_pass']} passes and {v['overturned_fail']} fails overturned)" for k, v in runtime.reputation.snapshot().items()) or "-")
     console.print("\n", table)
     console.print("Next: [bold]python -m data_pipeline.scripts.build_splits[/bold] to dedup and split.")
 

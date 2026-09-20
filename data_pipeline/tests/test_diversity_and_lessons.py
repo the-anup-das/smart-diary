@@ -43,9 +43,9 @@ def test_lessons_dedup_count_persist_and_reload(tmp_path):
     asyncio.run(fill())
     top = store.top("labels")
     assert len(top) == 2 and top[0].startswith("Invented passiveConsumptionMinutes")
-    assert store.counts() == {"entry": 1, "labels": 3}
+    assert store.counts() == {"entry": 1, "reviewer": 0, "labels": 3, "judge": 0}
     reloaded = LessonsStore(path, max_items=8)
-    assert reloaded.counts() == {"entry": 1, "labels": 3} and reloaded.top("entry") == ["Ends with a tidy moral lesson, unlike a real diary."]
+    assert reloaded.counts() == {"entry": 1, "reviewer": 0, "labels": 3, "judge": 0} and reloaded.top("entry") == ["Ends with a tidy moral lesson, unlike a real diary."]
     assert normalise("Hello,  World!!") == "hello world"
 
 

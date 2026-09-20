@@ -21,13 +21,23 @@ Review a simulated journal entry.
 Return only a JSON object with "approved" (true or false) and "critique"."""
 
 
-async def review_journal_entry(entry: str, profile: dict, *, endpoint: Endpoint) -> tuple[dict, dict]:
+LESSONS_HEADER = "Entries you approved earlier were later rejected by the judge for these reasons. Be stricter about them:"
+
+
+def build_reviewer_messages(entry: str, profile: dict, lessons: list[str] | None = None) -> list[dict]:
     user = (
         "Target persona and style:\n"
         f"- Role: {profile['persona']['role']}\n- Emotion: {profile['emotion']}\n- Topic: {profile['topic']}\n"
         f"- Expected style: {profile['style']}\n\nSimulated journal entry:\n\"\"\"{entry}\"\"\"\n\nReview it as JSON."
     )
-    messages = [{"role": "system", "content": REVIEWER_SYSTEM_PROMPT}, {"role": "user", "content": user}]
+    system = REVIEWER_SYSTEM_PROMPT
+    if lessons:
+        system += "\n\n" + LESSONS_HEADER + "\n" + "\n".join(f"- {lesson}" for lesson in lessons)
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+async def review_journal_entry(entry: str, profile: dict, *, endpoint: Endpoint, lessons: list[str] | None = None) -> tuple[dict, dict]:
+    messages = build_reviewer_messages(entry, profile, lessons)
     result = await acall_structured(endpoint, messages, ReviewVerdict, temperature=0.2, max_tokens=config.MAX_TOKENS_REVIEW)
     if result.parsed is None:
         return {"approved": False, "critique": f"reviewer output unreadable ({result.error}); tighten the entry's concrete detail"}, result.usage

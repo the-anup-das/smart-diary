@@ -96,6 +96,11 @@ class EndpointPool:
         self._until: dict[Endpoint, float] = {}
         self._limiters: dict[Endpoint, RateLimiter] = {ep: RateLimiter(ep.rpm) for ep in endpoints if ep.rpm}
 
+    def set_order(self, labels: list[str]) -> None:
+        """Reorder the endpoints by a list of labels, best first; unknown labels keep their place."""
+        rank = {label: i for i, label in enumerate(labels)}
+        self.endpoints.sort(key=lambda ep: rank.get(ep.label, len(rank)))
+
     def pick(self, exclude: set[Endpoint] | None = None) -> Endpoint | None:
         now = time.monotonic()
         for ep in self.endpoints:

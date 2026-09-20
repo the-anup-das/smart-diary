@@ -9,15 +9,20 @@ on and that the evaluator uses.
 ```mermaid
 flowchart LR
     subgraph gen["1. Generate (run.py)"]
-        W["Writer"] --> R["Reviewer"]
+        DC["Diversity controller"] --> W["Writer"] --> R["Reviewer"]
+        R -->|critique, 3 rounds| E["Editor"] --> R
         R -->|approved| A["Analyzer (teacher)"]
-        R -->|critique| E["Editor"] --> R
         A --> V["Validator: schema + rules"]
         V -->|errors fed back| A
-        V --> J["Judge (different model)"]
-        J -->|critique, one repair| A
-        J -->|pass| D[("dataset_raw.jsonl")]
-        J -.->|sample| J2["Second opinion"]
+        V --> J["Judge"]
+        J -->|entry at fault, once| E
+        J -->|labels at fault, once| A
+        J -->|pass or fail| J2["Second judge, other host"]
+        J2 -->|both pass| D[("dataset_raw.jsonl")]
+        J2 -.->|agreement moves reputation| J
+        J -.->|lessons| W
+        J -.->|lessons| R
+        J -.->|lessons| A
     end
     D --> S["2. build_splits: dedup, stratify"] --> T["3. finetune (Unsloth QLoRA)"]
     T --> G[("GGUF + merged fp16")]
@@ -44,13 +49,15 @@ Google keys used by the judge overflow are picked up from there.
 | Writer, reviewer, editor | `Qwen/Qwen3-30B-A3B-Instruct-2507` on `LLM_BASE_URL` | fast, good prose |
 | Analyzer (teacher) | one fixed model, `ANALYZER_MODEL` | labels keep a single calibration; chosen on the golden set |
 | Judge | `Ternary-Bonsai-2-27B` on `LLM_BASE_URL`, then LM Studio, then Gemini 3.6 Flash | a different family grades the labels; hosts rotate on rate limits or outages |
-| Second opinion | Cerebras `gpt-oss-120b` (optional) | re-judges 10% of passes and 25% of fails, logs disagreements |
+| Second judge | another host from the judge list, or Cerebras `gpt-oss-120b` when `CEREBRAS_API_KEY` is set | re-judges every sample; a fail from either judge is a fail; disagreements move the first judge's reputation |
 
 Every role can live on its own server (`<ROLE>_BASE_URL`, `<ROLE>_API_KEY`, `<ROLE>_MODEL`).
 Judges are a list: `base_url|key|model[|extra_json]` entries separated by `;`, where `key` is
 `env:NAME` or a literal, and `extra_json` holds per-host request parameters (Gemini 3.x needs
 `{"reasoning_effort": "low", "max_tokens": 800}`). Rotate writers by listing several models in
-`WRITER_MODELS`; rotate hosts for the judge, never the analyzer.
+`WRITER_MODELS`; rotate hosts for the judge, never the analyzer. Put the reviewer on a different
+model from the writer (`REVIEWER_BASE_URL`, `REVIEWER_API_KEY`, `REVIEWER_MODEL`, for example
+Gemma 4 in LM Studio) so no model approves its own prose.
 
 ## 1. Generate
 
@@ -63,13 +70,22 @@ streamlit run data_pipeline/dashboard.py                 # outcomes, judge score
 ```
 
 What happens per sample: a seeded diversity profile (persona, emotion, topic, style, length, an
-edge case for 30% of samples, a custom persona instruction for 15%); the writer drafts, the
-reviewer approves or the editor revises (three rounds at most); the analyzer labels the entry with
+edge case for 30% of samples, a custom persona instruction for 15%); the writer drafts; the
+reviewer approves or the editor revises, three rounds at most; the analyzer labels the entry with
 the production prompt; the validator checks the schema and the business rules and feeds errors
 back for a retry; the judge scores grounding, safety, CBT quality, schema semantics and persona
-adherence and either passes, sends one repair request to the analyzer with its critique, or
-discards. Rejection reasons go to `output/lessons.json` and steer later writers and analyzers;
-they never enter the training records.
+adherence. A judge fail goes back to the agent that can fix it: an entry problem sends the text
+to the writer (through the editor and the reviewer) once, a label problem sends the analysis back
+to the analyzer once, and only then is the sample discarded. A second judge on a different host
+re-judges every sample; a fail from either judge is a fail.
+
+The judge's notes become lessons in `output/lessons.json`, one bucket each for the writer, the
+reviewer (entries it approved that the judge rejected), the analyzer and the judge itself
+(verdicts the second judge overturned). Lessons steer later samples and never enter the training
+records. Each judge host carries a reputation in `output/judge_reputation.json`: +1 when the
+second judge agrees, -3 when a pass is overturned, -1 when a fail is overturned. The best-scored
+host is asked first, and a host that keeps being overturned must award more points before a
+sample passes.
 
 Outputs: `output/dataset_raw.jsonl` (entry, analysis, meta with models, judge scores, prompt
 version), `logs/telemetry.jsonl` (fixed keys), `output/judge_disagreements.jsonl`. Resume by
