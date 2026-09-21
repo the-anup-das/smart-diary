@@ -126,8 +126,15 @@ def write_jsonl(path: Path, rows: list[dict]) -> str:
     return digest.hexdigest()
 
 
-def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_threshold: float = 0.8) -> dict:
+def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_threshold: float = 0.8, teacher: str | None = None) -> dict:
     records = load_raw(raw_path)
+    all_teachers = sorted({(r.get("meta") or {}).get("teacher_model") or "?" for r in records})
+    if teacher:
+        # One dataset, one label style: a student trained on two teachers learns the average of two
+        # different ways of labelling the same entry.
+        records = [r for r in records if ((r.get("meta") or {}).get("teacher_model") or "") == teacher]
+        if not records:
+            raise SystemExit(f"no rows labelled by {teacher!r}; the file holds: {', '.join(all_teachers)}")
     kept, dedup_stats = dedup(records, near_threshold)
     train, test = stratified_split(kept, test_ratio, seed)
     train_path, test_path = out_dir / "training_dataset.jsonl", out_dir / "test_dataset.jsonl"
@@ -143,6 +150,7 @@ def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_t
         "prompt_version": PROMPT_VERSION,
         "seed": seed, "test_ratio": test_ratio, "near_duplicate_threshold": near_threshold,
         "raw_records": len(records), "dedup": dedup_stats, "kept": len(kept),
+        "teacher_filter": teacher, "teachers_in_file": all_teachers,
         "train": {"path": train_path.name, "rows": len(train), "sha256": train_sha},
         "test": {"path": test_path.name, "rows": len(test), "sha256": test_sha},
         "strata": dict(sorted(strata.items())),
@@ -160,10 +168,11 @@ def main() -> None:
     parser.add_argument("--test-ratio", type=float, default=config.TEST_SPLIT_RATIO)
     parser.add_argument("--seed", type=int, default=config.SEED)
     parser.add_argument("--near-threshold", type=float, default=0.8)
+    parser.add_argument("--teacher", default=None, help="keep only rows labelled by this teacher model, so one dataset carries one label style")
     args = parser.parse_args()
     if not args.input.exists():
         raise SystemExit(f"{args.input} does not exist; run the pipeline first")
-    manifest = build(args.input, args.out_dir, test_ratio=args.test_ratio, seed=args.seed, near_threshold=args.near_threshold)
+    manifest = build(args.input, args.out_dir, test_ratio=args.test_ratio, seed=args.seed, near_threshold=args.near_threshold, teacher=args.teacher)
     print(json.dumps(manifest, indent=1))
 
 

@@ -58,3 +58,30 @@ def test_build_is_deterministic_dedups_and_stratifies(tmp_path):
     assert m3["train"]["sha256"] != m1["train"]["sha256"]
     lines = (out1 / "training_dataset.jsonl").read_text(encoding="utf-8").splitlines()
     assert all(json.loads(line)["conversations"][0]["from"] == "system" for line in lines)
+
+
+def test_splits_can_keep_one_teachers_labels(tmp_path):
+    import json
+
+    import pytest
+
+    from data_pipeline.scripts.build_splits import build
+    from conftest import good_analysis
+
+    raw = tmp_path / "raw.jsonl"
+    with open(raw, "w", encoding="utf-8") as f:
+        for i in range(10):
+            teacher = "teacher-a" if i % 2 == 0 else "teacher-b"
+            entry = f"Sample {i}: " + " ".join(f"word{i}{j}" for j in range(40))
+            f.write(json.dumps({"id": f"r{i}", "entry": entry, "analysis": good_analysis(),
+                                "meta": {"teacher_model": teacher, "edge_case": None, "custom_persona": None}}) + "\n")
+
+    both = build(raw, tmp_path, test_ratio=0.2, seed=1)
+    assert both["kept"] == 10 and both["teacher_filter"] is None and both["teachers_in_file"] == ["teacher-a", "teacher-b"]
+
+    one = build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-a")
+    assert one["kept"] == 5 and one["teacher_filter"] == "teacher-a"
+    assert one["teacher_models"] == ["teacher-a"]                    # the manifest records what the student was trained on
+    assert one["train"]["rows"] + one["test"]["rows"] == 5
+    with pytest.raises(SystemExit, match="teacher-a, teacher-b"):
+        build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-c")

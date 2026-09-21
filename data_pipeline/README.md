@@ -152,6 +152,7 @@ and a two-topic split.
 
 ```bash
 python -m data_pipeline.scripts.build_splits --seed 3407 --test-ratio 0.1
+python -m data_pipeline.scripts.build_splits --teacher Ternary-Bonsai-2-27B   # one teacher's labels only
 ```
 
 Drops exact and near duplicates (5-word shingles, Jaccard 0.8, within a stratum), splits
