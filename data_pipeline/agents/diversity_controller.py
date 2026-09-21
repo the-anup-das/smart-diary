@@ -92,16 +92,23 @@ CUSTOM_PERSONA_PROMPTS = [
 ]
 
 
+EDGE_CASE_TYPES = tuple(e["type"] for e in EDGE_CASES)
+
+
 def generate_diversity_profile(
     rng: random.Random | None = None,
     force_edge_case: bool = False,
     edge_case_rate: float = 0.30,
     persona_rate: float = 0.15,
+    edge_case_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """A profile for the writer. Pass a seeded `random.Random` for reproducible runs."""
     rng = rng or random.Random()
+    pool = EDGE_CASES if not edge_case_types else [e for e in EDGE_CASES if e["type"] in set(edge_case_types)]
+    if not pool:
+        raise ValueError(f"no edge case matches {edge_case_types}; known types: {sorted(EDGE_CASE_TYPES)}")
     is_edge_case = force_edge_case or rng.random() < edge_case_rate
-    edge_case = rng.choice(EDGE_CASES) if is_edge_case else None
+    edge_case = rng.choice(pool) if is_edge_case else None
     custom_persona = rng.choice(CUSTOM_PERSONA_PROMPTS) if rng.random() < persona_rate else None
     return {
         "persona": rng.choice(PERSONAS),

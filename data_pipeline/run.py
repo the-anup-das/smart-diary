@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.text import Text
 
 from data_pipeline import config
-from data_pipeline.agents.diversity_controller import generate_diversity_profile
+from data_pipeline.agents.diversity_controller import EDGE_CASE_TYPES, generate_diversity_profile
 from data_pipeline.agents.llm_client import LLMCallError, acall_llm
 from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
 from data_pipeline.endpoints import Endpoint, EndpointPool
@@ -171,7 +171,8 @@ def telemetry_row(state: dict, final_status: str, reason: str | None) -> dict:
 
 class PipelineManager:
     def __init__(self, target_count: int, runtime: PipelineRuntime, graph, *, seed: int, force_edge_cases: bool = False,
-                 edge_case_rate: float | None = None, persona_rate: float | None = None, dry_run: bool = False, raw_path: Path | None = None):
+                 edge_case_rate: float | None = None, persona_rate: float | None = None, dry_run: bool = False, raw_path: Path | None = None,
+                 edge_case_types: list[str] | None = None):
         self.target_count = target_count   # approved samples to add in this run
         self.runtime = runtime
         self.graph = graph
@@ -179,6 +180,7 @@ class PipelineManager:
         self.force_edge_cases = force_edge_cases
         self.edge_case_rate = config.EDGE_CASE_RATE if edge_case_rate is None else edge_case_rate
         self.persona_rate = config.PERSONA_PROMPT_RATE if persona_rate is None else persona_rate
+        self.edge_case_types = edge_case_types
         self.dry_run = dry_run
         self.raw_path = raw_path or config.RAW_DATASET_PATH
         self.total_approved = count_existing_samples(self.raw_path)
@@ -198,7 +200,8 @@ class PipelineManager:
 
     def _profile_for(self, attempt: int) -> dict:
         rng = random.Random(self.seed * 1_000_003 + self.start_offset * 7919 + attempt)
-        return generate_diversity_profile(rng, force_edge_case=self.force_edge_cases, edge_case_rate=self.edge_case_rate, persona_rate=self.persona_rate)
+        return generate_diversity_profile(rng, force_edge_case=self.force_edge_cases, edge_case_rate=self.edge_case_rate,
+                                          persona_rate=self.persona_rate, edge_case_types=self.edge_case_types)
 
     async def run_single_pipeline(self, board: "RunBoard | None" = None) -> dict | None:
         async with self.lock:
@@ -661,6 +664,8 @@ def _print_banner(args, manager: PipelineManager, runtime: PipelineRuntime, conc
         f"[bold cyan]Lessons:[/bold cyan] {'on' if runtime.lessons.enabled else 'off'} ({runtime.lessons.counts()})   "
         f"[bold cyan]Seed:[/bold cyan] {args.seed}   [bold cyan]Concurrency:[/bold cyan] {concurrency}{' (auto)' if args.concurrency == 'auto' else ''}",
         f"[bold cyan]Per host:[/bold cyan] {_host_limits_line(runtime)}",
+        f"[bold cyan]Edge cases:[/bold cyan] {', '.join(manager.edge_case_types) if manager.edge_case_types else 'all'}"
+        f"{' on every sample' if args.force_edge_cases else f', {manager.edge_case_rate:.0%} of samples'}",
         f"[bold cyan]Prompt version:[/bold cyan] {PROMPT_VERSION}",
     ]
     console.print(Panel("\n".join(lines), title="[bold green]Distillation run[/bold green]", border_style="bright_blue"))
@@ -672,6 +677,7 @@ async def amain() -> None:
     parser.add_argument("--total", type=int, default=None, help="instead of --count: stop when dataset_raw.jsonl holds this many samples")
     parser.add_argument("--concurrency", type=str, default="5", help="parallel pipelines, an integer or 'auto'")
     parser.add_argument("--force-edge-cases", action="store_true", help="every sample gets an edge case")
+    parser.add_argument("--edge-cases", default=None, help=f"draw edge cases only from these types, comma separated: {', '.join(EDGE_CASE_TYPES)}")
     parser.add_argument("--seed", type=int, default=config.SEED)
     parser.add_argument("--edge-rate", type=float, default=None, help=f"share of samples with an edge case (default {config.EDGE_CASE_RATE})")
     parser.add_argument("--persona-rate", type=float, default=None, help=f"share of samples with custom instructions (default {config.PERSONA_PROMPT_RATE})")
@@ -696,9 +702,14 @@ async def amain() -> None:
 
     existing = count_existing_samples()
     to_add = max(0, args.total - existing) if args.total is not None else args.count
+    edge_case_types = [t.strip() for t in args.edge_cases.split(",") if t.strip()] if args.edge_cases else None
+    unknown = sorted(set(edge_case_types or []) - set(EDGE_CASE_TYPES))
+    if unknown:
+        raise SystemExit(f"unknown edge case(s) {unknown}; choose from: {', '.join(EDGE_CASE_TYPES)}")
     manager = PipelineManager(
         to_add, runtime, graph, seed=args.seed, force_edge_cases=args.force_edge_cases,
         edge_case_rate=args.edge_rate, persona_rate=args.persona_rate, dry_run=args.dry_run,
+        edge_case_types=edge_case_types,
     )
     if args.check or not args.skip_preflight:
         healthy = await preflight(runtime, console)

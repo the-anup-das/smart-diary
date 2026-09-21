@@ -53,3 +53,22 @@ def test_disabled_store_records_nothing(tmp_path):
     store = LessonsStore(tmp_path / "x.json", enabled=False)
     asyncio.run(store.add("labels", "something long enough to count as a lesson"))
     assert store.top("labels") == [] and not (tmp_path / "x.json").exists()
+
+
+def test_a_batch_can_be_aimed_at_chosen_edge_cases():
+    import pytest
+
+    from data_pipeline.agents.diversity_controller import EDGE_CASE_TYPES
+
+    rng = random.Random(7)
+    wanted = ["acute_crisis_signals", "ordinary_venting_not_crisis"]
+    profiles = [generate_diversity_profile(rng, force_edge_case=True, edge_case_types=wanted) for _ in range(30)]
+    seen = {p["edge_case"]["type"] for p in profiles}
+    assert seen == set(wanted)                       # only the chosen ones, and both of them
+    one = generate_diversity_profile(random.Random(1), force_edge_case=True, edge_case_types=["messy_grammar"])
+    assert one["edge_case"]["type"] == "messy_grammar"
+    assert generate_diversity_profile(random.Random(1), edge_case_rate=0.0, edge_case_types=wanted)["edge_case"] is None
+    with pytest.raises(ValueError):
+        generate_diversity_profile(rng, force_edge_case=True, edge_case_types=["not_a_case"])
+    for needed in ("compulsive_stimulation", "brain_fog_and_passive_consumption", "calm_low_rumination", "no_signals_control"):
+        assert needed in EDGE_CASE_TYPES           # the coverage the dataset is missing has a name to ask for

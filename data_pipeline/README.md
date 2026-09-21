@@ -76,6 +76,7 @@ python -m data_pipeline.run --count 1 --dry-run          # one sample end to end
 python -m data_pipeline.run --count 5 --concurrency 2    # smoke run: adds 5 approved samples
 python -m data_pipeline.run --count 200 --concurrency 3  # each run adds --count more; nothing is overwritten
 python -m data_pipeline.run --total 1500 --concurrency 3 # or stop when the dataset holds 1500
+python -m data_pipeline.run --count 40 --force-edge-cases --edge-cases acute_crisis_signals,ordinary_venting_not_crisis
 streamlit run data_pipeline/dashboard.py                 # outcomes, judge scores, lessons, samples
 ```
 
