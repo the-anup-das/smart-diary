@@ -71,7 +71,10 @@ export function FuelGauges() {
       <details className="mt-4 text-xs text-gray-500">
         <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">How this is worked out</summary>
         <p className="mt-2 leading-relaxed">
-          {data.note} Each analysed day counts once as fed, drained, both or neither, so the gauge is the balance of days, not of mentions.
+          {data.source.kind === "model"
+            ? `The model${data.source.model ? ` (${data.source.model})` : ""} read this week's entries and noted, day by day, what fed or drained each fuel, quoting the entry for each. It is asked again once a day or when a new entry lands.`
+            : "The model was not available, so these gauges come from the signals already stored with each analysed entry: activities, screen habits, mood, rumination and emotion words."}
+          {" "}{data.note} Each analysed day counts once as fed, drained, both or neither, so the gauge is the balance of days, not of mentions.
           A challenge you tick counts as feeding its fuel that day, and where it matches a Mind Fitness activity it is logged there too.
           The framing follows the DOSE idea (dopamine, oxytocin, serotonin, endorphins): cheap rewards are everywhere, the other three take small daily acts.
         </p>

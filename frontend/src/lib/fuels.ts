@@ -52,6 +52,8 @@ export interface FuelsData {
   fuels: Fuel[]
   headline: string
   note: string
+  /** Who did the judging: the model read the week's entries, or the stored analysis signals stood in for it. */
+  source: { kind: "model" | "signals"; model: string | null; cached: boolean }
 }
 
 export const FUEL_STYLES: Record<FuelKey, { bar: string; text: string; ring: string }> = {

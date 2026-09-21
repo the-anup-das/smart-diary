@@ -216,3 +216,70 @@ def test_keyword_rules_match_words_not_fragments():
             assert not rx.search(text), f"{rx.pattern[:30]}... should not match {text!r}"
         for text in hits:
             assert rx.search(text), f"{rx.pattern[:30]}... should match {text!r}"
+
+
+# ---------------------------------------------------------------- the model judges, the rules are the fallback
+
+def _judgement(*observations, headline="Light on Drive this week, strong on Spark."):
+    return fuels_router.FuelJudgement(observations=[fuels_router.FuelObservation(**o) for o in observations], headline=headline)
+
+
+def test_the_models_observations_drive_the_gauges_and_are_cached_per_day(client, db_session, monkeypatch):
+    today = datetime.utcnow().date()
+    _add_entry(db_session, 0, mood=6)                         # signals alone would say nothing about drive
+    _add_entry(db_session, 1, mood=6)
+    calls = []
+
+    def fake_judge(day_texts):
+        calls.append([d for d, _ in day_texts])
+        return _judgement(
+            {"date": today.isoformat(), "fuel": "drive", "effect": "drained", "tag": "night_screens", "reason": "scrolled until 2am again"},
+            {"date": (today - timedelta(days=1)).isoformat(), "fuel": "drive", "effect": "drained", "tag": "night_screens", "reason": "phone in bed till late"},
+            {"date": today.isoformat(), "fuel": "spark", "effect": "fed", "tag": "moving", "reason": "ran by the river before work"},
+            {"date": "1999-01-01", "fuel": "calm", "effect": "fed", "tag": "steady", "reason": "outside the window, dropped"},
+        )
+
+    monkeypatch.setattr(fuels_router, "judge_week", fake_judge)
+    data = client.get("/api/insights/fuels").json()
+    assert data["source"]["kind"] == "model" and data["source"]["cached"] is False
+    assert data["headline"] == "Light on Drive this week, strong on Spark."
+    by_key = {f["key"]: f for f in data["fuels"]}
+    assert by_key["drive"]["score"] == 0 and by_key["drive"]["drainedDays"] == 2 and by_key["drive"]["challenge"]["id"] == "phone_outside_bedroom"
+    assert by_key["drive"]["drainedByReasons"][0]["text"] in ("scrolled until 2am again", "phone in bed till late")
+    assert by_key["spark"]["fedDays"] == 1 and by_key["calm"]["fedDays"] == 0
+    assert calls == [[(today - timedelta(days=1)).isoformat(), today.isoformat()]]   # both days went to the model, oldest first
+
+    again = client.get("/api/insights/fuels").json()
+    assert again["source"]["cached"] is True and len(calls) == 1                   # same day, same entries: no second call
+    client.get("/api/insights/fuels?refresh=true")
+    assert len(calls) == 2                                                           # refresh asks again
+    _add_entry(db_session, 0, mood=6)
+    client.get("/api/insights/fuels")
+    assert len(calls) == 3                                                           # a new entry invalidates the cache
+
+
+def test_without_a_model_the_stored_signals_carry_the_gauges(client, db_session, monkeypatch):
+    _add_entry(db_session, 0, stim=SCROLL_NIGHT, mood=3)
+    monkeypatch.setattr(fuels_router, "judge_week", lambda day_texts: None)         # the model could not answer
+    data = client.get("/api/insights/fuels").json()
+    assert data["source"] == {"kind": "signals", "model": None, "cached": False}
+    assert next(f for f in data["fuels"] if f["key"] == "drive")["drainedDays"] == 1
+
+    user = db_session.query(models.User).filter(models.User.id == TEST_USER).first()
+    user.preferences = {"pause_ai": True}
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(fuels_router, "judge_week", lambda day_texts: calls.append(1) or _judgement())
+    assert client.get("/api/insights/fuels").json()["source"]["kind"] == "signals" and calls == []   # paused AI: never asked
+
+
+def test_judge_week_prompt_lists_every_tag_and_survives_a_dead_client(monkeypatch):
+    prompt = fuels_router._judging_prompt()
+    for fuel, sides in fuels_router.TAGS.items():
+        for tags in sides.values():
+            for tag in tags:
+                assert f"`{tag}`" in prompt
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setattr(fuels_router, "_client", None)
+    assert fuels_router.judge_week([("2026-09-20", "a day")]) is None      # no key, no crash
+    assert fuels_router.judge_week([]) is None

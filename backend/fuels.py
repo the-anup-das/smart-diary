@@ -108,6 +108,63 @@ CHALLENGES = {
 }
 CHALLENGE_BY_ID = {c["id"]: dict(c, fuel=fuel) for fuel, items in CHALLENGES.items() for c in items}
 
+# The vocabulary the model judges with. A tag is what a challenge answers; the reason is what the
+# person reads. The rules below produce the same tags, so either source feeds the same gauges.
+TAGS = {
+    "drive": {
+        "fed": {"effort": "effort spent, something finished, a block of deep work, learning or making"},
+        "drained": {
+            "night_screens": "screens or scrolling late at night",
+            "morning_screens": "the phone first thing in the morning",
+            "short_video": "short-form video, reels, endless clips",
+            "screens": "other cheap rewards: scrolling, gaming, feeds, feeling flat or guilty afterwards",
+        },
+    },
+    "bond": {
+        "fed": {"contact": "a real conversation, time with people or pets, feeling connected or supported"},
+        "drained": {
+            "lonely": "loneliness, isolation, feeling unseen or ignored",
+            "conflict": "an argument, a clash, tension with someone",
+            "strain": "a hard day around people without an open clash",
+        },
+    },
+    "calm": {
+        "fed": {"steady": "daylight, nature, a walk, rest, good sleep, gratitude, a settled mood"},
+        "drained": {
+            "rumination": "replaying the same worry, anxious looping",
+            "sleep": "broken, short or late sleep",
+            "low_mood": "a low, flat or hopeless day",
+        },
+    },
+    "spark": {
+        "fed": {"moving": "exercise, a run, a walk, sport, dancing, laughter, singing, cold water"},
+        "drained": {
+            "sedentary": "sitting all day, no movement",
+            "flat": "exhausted, sluggish, physically flat",
+        },
+    },
+}
+
+
+def evidence_from_observations(observations, dates: Iterable[str]) -> dict[str, dict[str, dict[str, list[tuple[str, str]]]]]:
+    """Per date, the same evidence shape the rules produce, from the model's observations.
+
+    Observations are `{"date", "fuel", "effect", "tag", "reason"}`; anything outside the fixed
+    vocabulary or outside the dates given is dropped, so a model that drifts cannot invent a fuel.
+    """
+    wanted = set(dates)
+    out = {d: {k: {"fed": [], "drained": []} for k in FUEL_KEYS} for d in wanted}
+    for o in observations or []:
+        get = o.get if isinstance(o, dict) else lambda k, default=None: getattr(o, k, default)
+        date, fuel, effect, tag = get("date"), get("fuel"), get("effect"), get("tag")
+        reason = " ".join(str(get("reason") or "").split())[:140]
+        if date not in wanted or fuel not in TAGS or effect not in ("fed", "drained") or tag not in TAGS[fuel][effect] or not reason:
+            continue
+        pair = (tag, reason)
+        if pair not in out[date][fuel][effect]:
+            out[date][fuel][effect].append(pair)
+    return out
+
 # ---------------------------------------------------------------- what the analysis can tell us
 
 _WARM = {"loved", "connected", "grateful", "supported", "close", "warm", "affectionate", "appreciated", "included", "cared", "belonging", "safe"}
@@ -396,4 +453,4 @@ def build_fuels(days: list[dict], previous_days: list[dict], done_today: set[str
     }
 
 
-__all__ = ["FUELS", "FUEL_KEYS", "CHALLENGES", "CHALLENGE_BY_ID", "evidence_from_feedback", "merge_evidence", "score_days", "build_fuels", "level_for", "pick_challenge"]
+__all__ = ["FUELS", "FUEL_KEYS", "TAGS", "CHALLENGES", "CHALLENGE_BY_ID", "evidence_from_feedback", "evidence_from_observations", "merge_evidence", "score_days", "build_fuels", "level_for", "pick_challenge"]
