@@ -182,3 +182,50 @@ def test_preflight_sidelines_failing_judges_and_falls_back_from_a_dead_second_ju
     assert runtime.judge2 is None and runtime.judge2_pool is None and "fallback" in text   # a 402 second judge gives way to the pool
     assert runtime.second_judge(gemini_a.label) is gemini_b
     assert "wants payment" in run_module.fatal_reason(LLMCallError("402", retryable=False, endpoint=cerebras, status=402))
+
+
+def test_preflight_credits_a_model_that_fills_two_roles(tmp_path, monkeypatch):
+    """The judge that is also the editor's model must still count as a judge."""
+    import random
+
+    from rich.console import Console
+
+    from data_pipeline import run as run_module
+    from data_pipeline.agents.llm_client import LLMCallError
+    from data_pipeline.endpoints import EndpointPool
+    from data_pipeline.graph import PipelineRuntime
+    from data_pipeline.lessons import LessonsStore
+    from data_pipeline.reputation import JudgeReputation
+
+    def ep(model, host, key="k"):
+        return Endpoint(base_url=f"https://{host}/v1", api_key=key, model=model, name=model)
+
+    qwen, bonsai, oss = ep("qwen", "endpoint"), ep("bonsai", "endpoint"), ep("gpt-oss", "lmstudio")
+    gemini_a, gemini_b = ep("gemini", "google", "key-a"), ep("gemini", "google", "key-b")
+    runtime = PipelineRuntime(                      # the owner's layout: writer and teacher on one model, editor and judge on another
+        analyzer=bonsai, editor=qwen, reviewer=oss, writers=[bonsai],
+        judge_pool=EndpointPool([qwen, oss, gemini_a, gemini_b], cooldown_s=0.01),
+        lessons=LessonsStore(tmp_path / "l.json"), reputation=JudgeReputation(tmp_path / "r.json"), rng=random.Random(0),
+    )
+    calls = []
+
+    async def fake_call(endpoint, messages, **kw):
+        calls.append((endpoint.model, endpoint.api_key))
+        if endpoint.host == "google":
+            raise LLMCallError("429 quota exceeded" if endpoint.api_key == "key-a" else "403 project disabled",
+                               retryable=endpoint.api_key == "key-a", endpoint=endpoint, status=429 if endpoint.api_key == "key-a" else 403)
+        return "ok", {"tokens": 1}
+
+    monkeypatch.setattr(run_module, "acall_llm", fake_call)
+    console = Console(width=150, force_terminal=False)
+    with console.capture() as cap:
+        healthy = asyncio.run(run_module.preflight(runtime, console))
+    text = cap.get()
+    assert healthy                                          # Gemini is down, but Qwen and gpt-oss judge fine
+    assert len(calls) == 5                                  # each model once, both Google keys separately
+    assert "editor, judge" in text and "writer, analyzer" in text and "reviewer, judge" in text
+    assert "no judge host answered" not in text
+
+    for endpoint in (qwen, oss):                            # a working judge is not sidelined
+        assert runtime.judge_pool.pick() is not None
+    assert runtime.judge_pool.pick() is qwen

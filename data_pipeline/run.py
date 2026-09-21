@@ -324,15 +324,16 @@ def fatal_reason(error: Exception) -> str | None:
 
 
 async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
-    """One-token request to every model a run depends on. A host can list a model and still not serve it."""
+    """One tiny request per model a run depends on. A host can list a model and still not serve it.
+
+    One model often fills several roles, so each is probed once and the result is credited to
+    every role that uses it: the judge that is also the editor's model still counts as a judge.
+    """
     roles: list[tuple[str, Endpoint, bool]] = []
-    seen: set[tuple[str, str, str]] = set()
 
     def add(role: str, ep: Endpoint | None, required: bool) -> None:
-        if ep is None or (ep.host, ep.model, ep.api_key) in seen:
-            return
-        seen.add((ep.host, ep.model, ep.api_key))
-        roles.append((role, ep, required))
+        if ep is not None:
+            roles.append((role, ep, required))
 
     for ep in runtime.writers:
         add("writer", ep, True)
@@ -343,41 +344,59 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
         add("judge", ep, False)
     add("second judge", runtime.judge2, False)
 
-    async def probe(role: str, ep: Endpoint):
+    def key_of(ep: Endpoint) -> tuple[str, str, str]:
+        return (ep.host, ep.model, ep.api_key)
+
+    unique: dict[tuple[str, str, str], Endpoint] = {}
+    for _role, ep, _required in roles:
+        unique.setdefault(key_of(ep), ep)
+
+    async def probe(ep: Endpoint):
         started = time.monotonic()
         try:
             await acall_llm(ep, [{"role": "user", "content": "Reply with the single word: ok"}], temperature=0.0, max_tokens=4, max_retries=1)
-            return role, ep, None, time.monotonic() - started
+            return None, time.monotonic() - started
         except LLMCallError as e:
             permanent = not e.retryable and e.status in PERMANENT_STATUSES
-            if role in ("judge", "second judge"):
-                pool = runtime.judge2_pool if role == "second judge" and runtime.judge2_pool else runtime.judge_pool
+            if any(r in ("judge", "second judge") for r, other, _ in roles if key_of(other) == key_of(ep)):
+                pool = runtime.judge2_pool if runtime.judge2 is not None and runtime.judge2_pool and key_of(runtime.judge2) == key_of(ep) else runtime.judge_pool
                 pool.penalise(ep, 10 * 3600 if permanent else None)   # sidelined for the run, or for one cooldown
-            return role, ep, str(e)[:140], time.monotonic() - started
+            return str(e)[:140], time.monotonic() - started
         except Exception as e:  # noqa: BLE001
-            return role, ep, f"{type(e).__name__}: {e}"[:140], time.monotonic() - started
+            return f"{type(e).__name__}: {e}"[:140], time.monotonic() - started
 
-    results = await asyncio.gather(*(probe(role, ep) for role, ep, _ in roles))
+    keys = list(unique)
+    answers = dict(zip(keys, await asyncio.gather(*(probe(unique[k]) for k in keys))))
+
+    roles_for: dict[tuple[str, str, str], list[str]] = {}
+    for role, ep, _required in roles:
+        names = roles_for.setdefault(key_of(ep), [])
+        if role not in names:
+            names.append(role)
+
     table = Table(title="[bold]Preflight: does every model answer?[/bold]", border_style="bright_blue", box=box.SIMPLE_HEAD)
     table.add_column("role", style="bold cyan")
     table.add_column("model @ host")
     table.add_column("result")
     ok = True
     judges_ok = 0
-    for (role, ep, required), (_, _, error, seconds) in zip(roles, results):
+    for key in keys:
+        ep = unique[key]
+        error, seconds = answers[key]
+        names = roles_for[key]
+        required = any(req for role, other, req in roles if key_of(other) == key)
         if error is None:
-            table.add_row(role, ep.label, f"[green]ok[/green] {seconds:.1f}s")
-            judges_ok += role == "judge"
+            table.add_row(", ".join(names), ep.label, f"[green]ok[/green] {seconds:.1f}s")
+            judges_ok += "judge" in names
         else:
-            table.add_row(role, ep.label, f"[red]{'FAIL' if required else 'unavailable'}[/red] {escape(error)}")
+            table.add_row(", ".join(names), ep.label, f"[red]{'FAIL' if required else 'unavailable'}[/red] {escape(error)}")
             ok = ok and not required
-    if not any(role == "judge" for role, _, _ in roles) or judges_ok == 0:
+    if judges_ok == 0:
         ok = False
         table.add_row("judge", "-", "[red]FAIL[/red] no judge host answered")
-    for (role, ep, _), (_, _, error, _) in zip(roles, results):
-        if role == "second judge" and error and runtime.judge2 is not None:
-            runtime.judge2, runtime.judge2_pool = None, None
-            table.add_row("second judge", "another host from the judge list", "[yellow]fallback[/yellow] the dedicated second judge is unavailable")
+    if runtime.judge2 is not None and answers[key_of(runtime.judge2)][0]:
+        runtime.judge2, runtime.judge2_pool = None, None
+        table.add_row("second judge", "another host from the judge list", "[yellow]fallback[/yellow] the dedicated second judge is unavailable")
     console.print(table)
     return ok
 
