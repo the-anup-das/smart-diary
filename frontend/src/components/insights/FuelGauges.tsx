@@ -51,7 +51,15 @@ export function FuelGauges() {
             Drive, bond, calm and spark: the four drives behind mood and motivation, read from what your last seven days of entries mention. One small act for whichever ran low.
           </p>
         </div>
-        <p className="text-sm font-medium text-gray-800 dark:text-gray-200 md:text-right md:max-w-xs">{data.headline}</p>
+        <div className="md:text-right md:max-w-xs">
+          <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{data.headline}</p>
+          {!empty && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              from {data.window.entries} analysed {data.window.entries === 1 ? "entry" : "entries"} in the last {data.window.days} days
+              {data.window.entries < 3 ? ", so take the gauges lightly" : ""}
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">

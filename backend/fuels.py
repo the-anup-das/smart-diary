@@ -118,14 +118,23 @@ _LOW = {"hopeless", "sad", "empty", "numb", "despairing", "defeated", "miserable
 _ENERGISED = {"energised", "energized", "proud", "alive", "strong", "exhilarated", "invigorated", "accomplished", "refreshed"}
 _SLUGGISH = {"sluggish", "drained", "lethargic", "flat", "exhausted", "depleted", "tired", "heavy"}
 
-_FINISHED = re.compile(r"finish|complet|progress|done with|shipped|built|wrote|solved|submitted|cleared", re.I)
-_PEOPLE = re.compile(r"friend|call|hug|dinner with|lunch with|partner|family|kids|mum|mom|dad|sister|brother|dog|cat|laugh(ed|ing) with|chat|(?-i:\bwith [A-Z][a-z]+)", re.I)   # "with Sam": a capitalised name
-_ALONE = re.compile(r"alone|lonely|isolat|ignored|nobody|no one|by myself", re.I)
-_CONFLICT = re.compile(r"argu|fight|fought|conflict|snapped|yelled|tension|row with|fell out", re.I)
-_OUTDOORS = re.compile(r"walk|sun|outside|garden|park|beach|forest|fresh air|nap|slept well|early night", re.I)
-_SLEEPLESS = re.compile(r"insomnia|[23] ?am|late night|couldn'?t sleep|no sleep|awake all night|slept badly", re.I)
-_MOVING = re.compile(r"\brun\b|ran\b|gym|walk|swim|yoga|workout|cycl|bike|hike|dance|laugh|sing|cold shower|stretch|football|climb", re.I)
-_SEDENTARY = re.compile(r"sitting all day|sat all day|desk all day|couch|no exercise|sedentary|didn'?t move|haven'?t moved", re.I)
+_FINISHED = re.compile(r"\bfinish|\bcomplet|\bprogress|\bdone with\b|\bshipped\b|\bbuilt\b|\bwrote\b|\bsolved\b|\bsubmitted\b|\bcleared\b", re.I)
+_PEOPLE = re.compile(
+    r"\bfriends?\b|\bcall(ed|ing|s)?\b|\bhug(s|ged|ging)?\b|\bdinner with\b|\blunch with\b|\bpartner\b|\bfamily\b|\bkids?\b"
+    r"|\bmum\b|\bmom\b|\bdad\b|\bsister\b|\bbrother\b|\bdog\b|\bcat\b|\blaugh(ed|ing)? with\b|\bchat(ted|ting|s)?\b"
+    r"|(?-i:\bwith [A-Z][a-z]+)",   # "with Sam": a capitalised name
+    re.I,
+)
+_ALONE = re.compile(r"\balone\b|\blonely\b|\bisolat|\bignored\b|\bnobody\b|\bno one\b|\bby myself\b", re.I)
+_CONFLICT = re.compile(r"\bargu|\bfight|\bfought\b|\bconflict|\bsnapped\b|\byelled\b|\btension\b|\brow with\b|\bfell out\b", re.I)
+_OUTDOORS = re.compile(r"\bwalk|\bsun(shine|light|ny|rise|set)?\b|\boutside\b|\boutdoors\b|\bgarden|\bpark\b|\bbeach\b|\bforest\b|\bfresh air\b|\bnap\b|\bslept well\b|\bearly night\b", re.I)
+_SLEEPLESS = re.compile(r"\binsomnia\b|\b[23] ?am\b|\blate night|\bcouldn'?t sleep|\bno sleep\b|\bawake all night|\bslept badly", re.I)
+_MOVING = re.compile(
+    r"\brun\b|\bran\b|\brunning\b|\bjog|\bgym\b|\bwalk|\bswim|\byoga\b|\bworkout|\bcycl|\bbike\b|\bhike|\bdanc(e|ed|ing)\b"
+    r"|\blaugh|\bsing(ing)?\b|\bsang\b|\bcold shower|\bstretch|\bfootball\b|\bclimb",
+    re.I,
+)
+_SEDENTARY = re.compile(r"\bsitting all day|\bsat all day|\bdesk all day|\bcouch\b|\bno exercise\b|\bsedentary\b|\bdidn'?t move|\bhaven'?t moved", re.I)
 
 _PEOPLE_TOPICS = {"family", "relationships", "social"}
 

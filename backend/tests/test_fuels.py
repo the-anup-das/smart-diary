@@ -198,3 +198,21 @@ def test_a_done_challenge_feeds_its_fuel_and_counts_for_mind_fitness(client, db_
     assert client.post("/api/insights/fuels/challenge", json={"id": "nope", "date": today, "done": True}).status_code == 422
     assert client.post("/api/insights/fuels/challenge", json={"id": "ten_squats", "date": "2020-01-01", "done": True}).status_code == 422
     assert client.post("/api/insights/fuels/challenge", json={"id": "ten_squats", "date": "not-a-date", "done": True}).status_code == 422
+
+
+def test_keyword_rules_match_words_not_fragments():
+    """'huge' is not a hug, 'Sunday' is not sunshine, 'using' is not singing, and 'went running' still counts."""
+    from fuels import _ALONE, _CONFLICT, _MOVING, _OUTDOORS, _PEOPLE, _SLEEPLESS
+
+    for rx, misses, hits in (
+        (_PEOPLE, ["a huge win at work", "vacation planning", "education stuff", "recalled the meeting"], ["hugged my sister", "chatted with Priya", "called Mum", "the dog"]),
+        (_OUTDOORS, ["Sunday was fine", "parking was a nightmare", "a snap decision"], ["sunshine on the balcony", "walked to the shops", "an hour in the garden"]),
+        (_MOVING, ["using the new tool", "abundance of work", "veteran colleague"], ["went running", "sang in the car", "a swim before work"]),
+        (_ALONE, ["a lone voice"], ["ate alone again"]),
+        (_CONFLICT, ["hypertension clinic"], ["we argued", "a row with Dad"]),
+        (_SLEEPLESS, ["the 3 amigos"], ["3am again", "couldn't sleep"]),
+    ):
+        for text in misses:
+            assert not rx.search(text), f"{rx.pattern[:30]}... should not match {text!r}"
+        for text in hits:
+            assert rx.search(text), f"{rx.pattern[:30]}... should match {text!r}"
