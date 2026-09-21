@@ -11,6 +11,7 @@ import { MoodHeatmap, type PatternDay } from "@/components/insights/MoodHeatmap"
 import { WeeklyRhythm, type WeekdayStat } from "@/components/insights/WeeklyRhythm"
 import { OverthinkingTrend, type OverthinkingStats } from "@/components/insights/OverthinkingTrend"
 import { FocusSignalCard } from "@/components/insights/FocusSignalCard"
+import { FuelGauges } from "@/components/insights/FuelGauges"
 import type { WellbeingAxis } from "@/lib/wellbeing"
 import { Target, TrendingUp, TrendingDown, Minus, Calendar, Brain, ListTodo, Activity, Zap, MessageSquare, Sun, BookOpen, RefreshCw, Sparkles, PenTool, BarChart2, Pin, Check, X, Flame, Repeat, Wind } from "lucide-react"
 import useSWR from "swr"
@@ -263,6 +264,9 @@ export default function InsightsPage() {
 
           {/* Focus & Stimulation: renders nothing unless the entries carry a signal or a reset is running */}
           <FocusSignalCard />
+
+          {/* Four Fuels: drive, bond, calm and spark over the last seven days, with one small act each */}
+          <FuelGauges />
 
           {/* Mood & Grammar Timeline */}
           <GlassCard>
