@@ -148,15 +148,15 @@ function playChime(ctx: AudioContext, final: boolean) {
       const start = now + i * 0.35
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-      osc.type = "sine"
+      osc.type = "triangle"   // a little harmonic content: a pure sine at this level vanishes on laptop speakers
       osc.frequency.value = freq
       gain.gain.setValueAtTime(0.0001, start)
-      gain.gain.exponentialRampToValueAtTime(0.12, start + 0.04)
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.4)
+      gain.gain.exponentialRampToValueAtTime(0.3, start + 0.05)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.6)
       osc.connect(gain)
       gain.connect(ctx.destination)
       osc.start(start)
-      osc.stop(start + 1.5)
+      osc.stop(start + 1.7)
     })
   } catch { /* audio is a nicety; never let it break the practice */ }
 }
@@ -580,9 +580,10 @@ export function ThreeMinuteReset({ open, source, onClose, onCompleted, onAppendT
 
   const plan = session?.plan ?? FALLBACK_PLAN
 
-  // The audio context has to be created inside a user gesture, so it is set up when Begin is pressed.
+  // The audio context has to be created inside a user gesture: Begin, or the sound switch being turned on.
+  // It is created regardless of the switch's current value, which is checked when a sound plays; reading the
+  // switch here used the stale value from before the toggle and left the whole session silent.
   const ensureAudio = () => {
-    if (!soundOn) return
     try {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
       if (!Ctx) return
@@ -610,6 +611,7 @@ export function ThreeMinuteReset({ open, source, onClose, onCompleted, onAppendT
   }
 
   const skipStep = () => {
+    if (step === "breathe" || step === "still" || step === "visualise") chime(step === "visualise")
     if (step === "breathe") setStep("still")
     else if (step === "still") setStep("visualise")
     else if (step === "visualise") setStep("checkout")
@@ -671,7 +673,14 @@ export function ThreeMinuteReset({ open, source, onClose, onCompleted, onAppendT
             <div className="flex items-center gap-3">
               <StepDots step={step} />
               <button
-                onClick={() => { toggleSound(); if (!soundOn) ensureAudio() }}
+                onClick={() => {
+                  const turningOn = !soundOn
+                  toggleSound()
+                  if (turningOn) {
+                    ensureAudio()
+                    if (audioRef.current) playChime(audioRef.current, false)
+                  }
+                }}
                 aria-label={soundOn ? "Turn chime off" : "Turn chime on"}
                 aria-pressed={soundOn}
                 title={soundOn ? "Chime on" : "Chime off"}
