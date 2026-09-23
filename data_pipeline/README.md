@@ -95,6 +95,13 @@ down at once. So keep the cap at 2 for a single-GPU endpoint and let `--concurre
 samples queue for the busy host and keep working on the others. The banner prints the cap per
 host, and a sample that waits more than a second for a slot says so on the board.
 
+Two rules keep the hosts working at the same time instead of taking turns. A new sample starts
+only when the writer's host has room for another draft, so samples enter at the writer's pace and
+spread across the stages rather than moving through them as one convoy. And at a host that
+serves several stages, the queue is ordered by stage: an analyzer call goes before a writer call,
+a judge call before both, so a sample that is nearly done is finished and handed to the next host
+before a new one is started.
+
 `HOST_MODELS` says what that limit counts, because one address often fronts several models.
 `host=separate` means each model has its own backend, so the limit applies per model and the
 teacher and the judge run side by side. `host=shared` means one GPU that cannot hold two of them:

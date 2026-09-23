@@ -402,6 +402,19 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
     return ok
 
 
+def writer_slots_free(runtime: PipelineRuntime, batch_index: int) -> bool:
+    """Start a new sample only when the writer's host has room for another draft.
+
+    Starting every sample at once sends them through the stages as one convoy: every host is
+    swamped and then idle in turn. Feeding them in at the writer's pace spreads them across the
+    stages, so the writer, the analyzer and the judge run at the same time on their own hosts.
+    """
+    ep = runtime.writer_endpoint(batch_index)
+    cap = config.host_limit(ep.host, ep.model if config.host_model_mode(ep.host) == "separate" else None)
+    drafting = sum(1 for s in TRACKER.rows() if s.stage in ("queued", "writer"))
+    return drafting < cap
+
+
 def speed_table(title: str | None = None) -> Table:
     """Inference speed per model: calls so far, what is running now, median latency and tokens per second.
     Tokens per second is completion tokens over the whole call, so prompt processing counts against it."""
@@ -811,7 +824,7 @@ async def amain() -> None:
         pending: set[asyncio.Task] = set()
         while manager.session_approved < to_add and not manager.aborted and not board.stop_requested:
             limit = config.CONCURRENCY_CONTROLLER.current
-            while len(pending) < limit and manager.session_approved + len(pending) < to_add:
+            while len(pending) < limit and manager.session_approved + len(pending) < to_add and writer_slots_free(runtime, manager.total_attempts // config.WRITER_BATCH_SIZE):
                 pending.add(asyncio.create_task(manager.run_single_pipeline(board)))
             if not pending:
                 break

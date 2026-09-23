@@ -275,3 +275,27 @@ def test_key_sequences_are_decoded_per_platform():
     reader.push("up")
     assert reader.drain() == ["up"] and reader.drain() == []
     reader.stop()
+
+
+def test_new_samples_start_only_when_the_writer_has_room(monkeypatch):
+    from types import SimpleNamespace
+
+    from data_pipeline import config
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.run import writer_slots_free
+
+    writer = Endpoint(base_url="https://endpoint/v1", api_key="k", model="bonsai", name="writer")
+    runtime = SimpleNamespace(writer_endpoint=lambda batch: writer)
+    monkeypatch.setattr(config, "HOST_LIMITS", {"endpoint/bonsai": 2})
+    monkeypatch.setattr(config, "HOST_MODEL_MODES", {"endpoint": "separate"})
+    assert writer_slots_free(runtime, 0)
+    for i in (1, 2):
+        TRACKER.start(i)
+        TRACKER.stage("writer", "drafting")
+    try:
+        assert not writer_slots_free(runtime, 0)              # two drafting, the cap is two
+        TRACKER.stage("analyzer", "labelling", attempt=1)     # one moved on: room again
+        assert writer_slots_free(runtime, 0)
+    finally:
+        TRACKER.finish(1)
+        TRACKER.finish(2)

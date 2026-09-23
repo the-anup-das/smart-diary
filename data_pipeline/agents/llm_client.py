@@ -35,6 +35,17 @@ RETRYABLE = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnection
 _extras_rejected: set[str] = set()          # hosts that answered 400 to the endpoint's extra parameters
 _create_params: dict[type, set[str] | None] = {}   # per client class: named parameters of chat.completions.create
 _REJECTED_HINTS = ("unrecognized", "unsupported", "unknown", "not permitted", "extra field", "not allowed", "invalid parameter", "unexpected")
+# Queue order at a shared host: the later a stage, the sooner it goes, so samples finish before new ones start.
+STAGE_PRIORITY = {"writer": 0, "reviewer": 1, "editor": 2, "analyzer": 3, "judge": 4, "judge2": 5}
+
+
+def stage_priority(role: str) -> int:
+    role = (role or "").lower()
+    if role.startswith("judge2"):
+        return STAGE_PRIORITY["judge2"]
+    if role.startswith("judge"):
+        return STAGE_PRIORITY["judge"]
+    return STAGE_PRIORITY.get(role, 0)
 
 
 def _request_kwargs(client, params: dict) -> dict:
@@ -135,7 +146,7 @@ async def acall_llm(
             queued = limiter.waiting
             swapping = limiter.blocked_by_model(ep.model)
             started = time.monotonic()
-            async with limiter.slot(ep.model):
+            async with limiter.slot(ep.model, stage_priority(getattr(ep, "name", ""))):
                 waited = time.monotonic() - started
                 if waited > 1.0 and (queued or swapping):
                     reason = f"{ep.host} was busy with another model" if swapping else f"{ep.host} takes {limiter.limit} at a time, {queued} queued"

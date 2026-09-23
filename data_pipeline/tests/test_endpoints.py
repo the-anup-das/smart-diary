@@ -219,3 +219,37 @@ def test_a_model_may_have_its_own_cap(monkeypatch):
     assert config.host_limit("api.example.com") == 2 and config.host_limit("other.example", "any") == 2
     with pytest.raises(SystemExit):
         config._parse_host_limits("api.example.com/model=lots")
+
+
+def test_a_later_stage_goes_before_an_earlier_one_at_a_shared_host():
+    import asyncio
+
+    from data_pipeline.endpoints import HostLimiter
+
+    async def scenario():
+        limiter = HostLimiter(1)
+        order = []
+
+        async def request(name, priority, delay):
+            await asyncio.sleep(delay)
+            async with limiter.slot("m", priority):
+                order.append(name)
+                await asyncio.sleep(0.05)
+
+        await asyncio.gather(
+            request("writer-1", 0, 0.0),        # holds the only slot
+            request("writer-2", 0, 0.01),       # queued first...
+            request("analyzer", 3, 0.02),       # ...but the analyzer arrives later with a higher priority
+            request("judge", 4, 0.03),
+        )
+        return order
+
+    assert asyncio.run(scenario()) == ["writer-1", "judge", "analyzer", "writer-2"]
+
+
+def test_stage_priority_follows_the_role_name():
+    from data_pipeline.agents.llm_client import stage_priority
+
+    assert stage_priority("writer") < stage_priority("reviewer") < stage_priority("editor") < stage_priority("analyzer")
+    assert stage_priority("analyzer") < stage_priority("judge1") == stage_priority("judge3") < stage_priority("judge2")
+    assert stage_priority("") == 0 and stage_priority("something-else") == 0

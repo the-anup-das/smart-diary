@@ -150,6 +150,8 @@ class HostLimiter:
         self.last_model: str | None = None      # survives the drain, so a switch is counted once
         self.switches = 0
         self._pending_model: str | None = None      # a different model is waiting; drain for it
+        self._waiters: list[tuple[tuple, str]] = []  # ((-priority, arrival), model) for everyone queued
+        self._seq = 0
         self._condition = asyncio.Condition()
         self._next_start = 0.0
         self._pacing_lock = asyncio.Lock()
@@ -165,17 +167,33 @@ class HostLimiter:
     def blocked_by_model(self, model: str) -> bool:
         return self.exclusive_model and self.current_model not in (None, model) and self.in_flight > 0
 
+    def _is_next(self, token: tuple, model: str) -> bool:
+        """This waiter may go when its model may start and no waiter ahead of it (higher priority, then earlier) can also start."""
+        if not self._may_start(model):
+            return False
+        return token == min(t for t, m in self._waiters if self._may_start(m))
+
     @contextlib.asynccontextmanager
-    async def slot(self, model: str = ""):
-        """Hold a slot on the host for the length of one request."""
+    async def slot(self, model: str = "", priority: int = 0):
+        """Hold a slot on the host for the length of one request.
+
+        `priority` orders the queue: a higher value goes first when a slot frees. The pipeline
+        gives later stages a higher priority, so a sample that is nearly done is finished before
+        a new one is started, work in progress drains to the next host, and the hosts overlap
+        instead of taking turns.
+        """
+        token = (-int(priority), self._seq)
+        self._seq += 1
         async with self._condition:
+            self._waiters.append((token, model))
             self.waiting += 1
             try:
-                while not self._may_start(model):
+                while not self._is_next(token, model):
                     if self.exclusive_model and self.current_model not in (None, model) and self._pending_model is None:
                         self._pending_model = model
                     await self._condition.wait()
             finally:
+                self._waiters.remove((token, model))
                 self.waiting -= 1
             if self.exclusive_model and self.last_model not in (None, model):
                 self.switches += 1
