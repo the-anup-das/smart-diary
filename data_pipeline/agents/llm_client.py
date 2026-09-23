@@ -25,6 +25,7 @@ from pydantic import BaseModel, ValidationError
 
 from data_pipeline import config
 from data_pipeline.endpoints import Endpoint, host_limiter, reset_host_limiters
+from data_pipeline.metrics import METRICS
 from data_pipeline.status import TRACKER
 
 _clients: dict[tuple[str, str], AsyncOpenAI] = {}
@@ -139,10 +140,17 @@ async def acall_llm(
                 if waited > 1.0 and (queued or swapping):
                     reason = f"{ep.host} was busy with another model" if swapping else f"{ep.host} takes {limiter.limit} at a time, {queued} queued"
                     TRACKER.note(f"waited {waited:.0f}s: {reason}")
-                response = await client.chat.completions.create(**_request_kwargs(client, params))
+                call_started = METRICS.start(ep)
+                try:
+                    response = await client.chat.completions.create(**_request_kwargs(client, params))
+                except Exception as e:  # noqa: BLE001  recorded, then handled by the retry policy below
+                    METRICS.finish(ep, call_started, error=f"{type(e).__name__}: {e}", timeout=isinstance(e, openai.APITimeoutError))
+                    raise
             config.CONCURRENCY_CONTROLLER.increase()
             content = (response.choices[0].message.content or "").strip() if response.choices else ""
-            return content, _usage(response, ep)
+            usage = _usage(response, ep)
+            METRICS.finish(ep, call_started, usage=usage)
+            return content, usage
         except openai.RateLimitError as e:
             config.CONCURRENCY_CONTROLLER.decrease()
             last = LLMCallError(f"429 from {ep.label}: {e}", retryable=True, endpoint=ep, status=429)
@@ -285,3 +293,4 @@ def reset_caches() -> None:
     _extras_rejected.clear()
     _create_params.clear()
     reset_host_limiters()
+    METRICS.reset()

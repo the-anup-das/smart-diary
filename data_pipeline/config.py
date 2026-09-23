@@ -35,6 +35,7 @@ JUDGE_DISAGREEMENTS_PATH = OUTPUT_DIR / "judge_disagreements.jsonl"
 JUDGE_REPUTATION_PATH = OUTPUT_DIR / "judge_reputation.json"
 TELEMETRY_LOG_PATH = LOGS_DIR / "telemetry.jsonl"
 REJECTIONS_LOG_PATH = LOGS_DIR / "rejections.log"
+CALLS_LOG_PATH = LOGS_DIR / "calls.jsonl"          # one line per model call: latency, tokens, tokens per second
 
 
 def ensure_dirs() -> None:

@@ -42,7 +42,7 @@ def test_pool_rotates_on_penalty_and_recovers():
     assert pool.pick(exclude={eps[1]}) is None
     assert pool.seconds_until_available() == 0.0  # b is still free
     pool.penalise(eps[1])
-    assert pool.pick() is None and 0 < pool.seconds_until_available() <= 0.05
+    assert pool.pick() is None and 0 < pool.seconds_until_available() <= 0.05 + 1e-6   # exactly 0.05 when the clock has not ticked
     time.sleep(0.12)   # well past the cooldown: the Windows clock ticks every 16 ms
     assert pool.pick().host == "a"
 

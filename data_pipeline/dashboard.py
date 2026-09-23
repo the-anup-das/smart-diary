@@ -13,6 +13,7 @@ st.title("Synthetic data distillation")
 
 BASE_DIR = Path(__file__).resolve().parent
 TELEMETRY_PATH = BASE_DIR / "logs" / "telemetry.jsonl"
+CALLS_PATH = BASE_DIR / "logs" / "calls.jsonl"
 RAW_PATH = BASE_DIR / "output" / "dataset_raw.jsonl"
 LESSONS_PATH = BASE_DIR / "output" / "lessons.json"
 REPUTATION_PATH = BASE_DIR / "output" / "judge_reputation.json"
@@ -176,6 +177,57 @@ if not failed.empty:
 if MANIFEST_PATH.exists():
     with st.expander("Latest splits manifest"):
         st.json(read_json(MANIFEST_PATH))
+
+
+# ---------------------------------------------------------------- model speed
+st.markdown("---")
+st.markdown("### Model speed")
+calls = pd.DataFrame(read_jsonl(CALLS_PATH))
+if calls.empty:
+    st.write("No call log yet. Every model call a run makes is written to `logs/calls.jsonl` with its latency and tokens per second.")
+else:
+    calls["timestamp"] = pd.to_datetime(calls["timestamp"], errors="coerce")
+    calls["label"] = calls["model"].fillna("?") + "@" + calls["host"].fillna("?")
+    calls["ok"] = calls["ok"].fillna(False).astype(bool)
+    calls["timeout"] = calls["timeout"].fillna(False).astype(bool)
+    calls["role"] = calls["role"].fillna("").replace("", "-")
+    ok = calls[calls["ok"]]
+    by_model = calls.groupby("label")
+    good = ok.groupby("label")
+    speed = pd.DataFrame({
+        "calls": by_model.size(),
+        "roles": by_model["role"].apply(lambda s: ", ".join(sorted(set(s)))),
+        "median latency s": good["latency_s"].median().round(1),
+        "p90 latency s": good["latency_s"].quantile(0.9).round(1),
+        "median tok/s": good["tokens_per_s"].median().round(1),
+        "best tok/s": good["tokens_per_s"].max().round(1),
+        "avg reply tokens": good["completion_tokens"].mean().round(0),
+        "errors": by_model["ok"].apply(lambda s: int((~s).sum())),
+        "timeouts": by_model["timeout"].apply(lambda s: int(s.sum())),
+    }).sort_values("calls", ascending=False)
+    st.dataframe(speed)
+    st.caption("Tokens per second is reply tokens over the whole call, so prompt processing and queueing on the server count against it. "
+               "Latency is wall-clock from request to reply, after the pipeline's own per-host queue.")
+
+    m1, m2 = st.columns(2)
+    with m1:
+        st.markdown("#### Speed over time")
+        recent = ok.dropna(subset=["tokens_per_s", "timestamp"]).tail(400)
+        if recent.empty:
+            st.write("No timed calls with token counts yet.")
+        else:
+            st.line_chart(recent.pivot_table(index="timestamp", columns="label", values="tokens_per_s"))
+            st.caption("Each point is one call; a falling line on one model means its server is queueing or swapping.")
+    with m2:
+        st.markdown("#### By role")
+        by_role = ok.groupby(["role", "label"]).agg(
+            calls=("ok", "size"), median_latency_s=("latency_s", "median"), median_tps=("tokens_per_s", "median"),
+        ).round(1).sort_values("calls", ascending=False)
+        st.dataframe(by_role)
+        st.caption("The same model can be slow as a judge and quick as a reviewer: the prompts differ in length.")
+    slow = ok.sort_values("latency_s", ascending=False).head(5)[["timestamp", "label", "role", "latency_s", "completion_tokens", "tokens_per_s"]]
+    with st.expander("Slowest five calls"):
+        st.dataframe(slow)
 
 # ---------------------------------------------------------------- samples
 st.markdown("---")

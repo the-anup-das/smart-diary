@@ -44,6 +44,7 @@ from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
 from data_pipeline.keys import KeyReader
 from data_pipeline.lessons import LessonsStore
+from data_pipeline.metrics import METRICS, fmt_latency, fmt_tps
 from data_pipeline.reputation import JudgeReputation
 from data_pipeline.status import TRACKER, fmt_seconds
 from data_pipeline.status import TRACKER, fmt_seconds
@@ -401,6 +402,30 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
     return ok
 
 
+def speed_table(title: str | None = None) -> Table:
+    """Inference speed per model: calls so far, what is running now, median latency and tokens per second.
+    Tokens per second is completion tokens over the whole call, so prompt processing counts against it."""
+    table = Table(title=title, box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, expand=False, border_style="bright_blue")
+    table.add_column("model", no_wrap=True, overflow="ellipsis", max_width=44)
+    table.add_column("roles", no_wrap=True, overflow="ellipsis", max_width=26, style="dim")
+    table.add_column("calls", justify="right")
+    table.add_column("now", justify="right")
+    table.add_column("latency", justify="right")
+    table.add_column("tok/s", justify="right")
+    table.add_column("last", justify="right")
+    table.add_column("errors", justify="right")
+    for s in METRICS.snapshot():
+        tps = s["medianTps"]
+        tone = "green" if tps and tps >= 20 else "yellow" if tps and tps >= 8 else "red" if tps else "dim"
+        errors = f"{s['errors']}" + (f" ({s['timeouts']} timeouts)" if s["timeouts"] else "")
+        table.add_row(
+            f"{s['model']}@{s['host']}", ", ".join(s["roles"]), str(s["calls"]), str(s["inFlight"]) if s["inFlight"] else "",
+            fmt_latency(s["medianLatency"]), f"[{tone}]{fmt_tps(tps)}[/{tone}]", fmt_tps(s["lastTps"]),
+            f"[red]{errors}[/red]" if s["errors"] else "0",
+        )
+    return table
+
+
 def describe_profile(profile: dict) -> str:
     """One line on what the sample is meant to be: who writes, how they feel, about what, in which style."""
     def short(value, limit: int = 42) -> str:
@@ -480,7 +505,7 @@ class RunBoard:
         "validator": "white", "judge": "green", "second judge": "bright_green",
     }
 
-    def __init__(self, manager: PipelineManager, *, to_add: int, existing: int, console: Console, plain: bool = False):
+    def __init__(self, manager: PipelineManager, *, to_add: int, existing: int, console: Console, plain: bool = False, show_speeds: bool = False):
         self.manager = manager
         self.console = console
         # A live region repaints in place: the terminal cannot scroll while it runs and the output
@@ -498,6 +523,7 @@ class RunBoard:
         self.scroll = 0                 # first sample row shown; the arrows move this window
         self.follow = True              # stay on the oldest samples unless the reader scrolled away
         self.stop_requested = False     # q: let the samples in flight finish, spawn no more
+        self.show_speeds = show_speeds  # m: a table of inference speed per model, under the counters
         self.keys = KeyReader()
 
     def __enter__(self) -> "RunBoard":
@@ -538,6 +564,8 @@ class RunBoard:
             self.scroll, self.follow = 0, True
         elif key == "end":
             self.scroll, self.follow = max(0, rows - self.visible_rows()), False
+        elif key == "models":
+            self.show_speeds = not self.show_speeds
         elif key == "quit" and not self.stop_requested:
             self.stop_requested = True
             self.log("[bold yellow]Finishing the samples in flight, then stopping. Approved samples are already saved.[/bold yellow]")
@@ -557,9 +585,10 @@ class RunBoard:
         rows = sorted(TRACKER.rows(), key=lambda s: s.started)
         where = "; ".join(f"#{s.attempt} {s.stage} {fmt_seconds(s.elapsed(now))}" for s in rows[:8])
         more = f" (+{len(rows) - 8} more)" if len(rows) > 8 else ""
+        speeds = "; ".join(f"{s['model'].split('/')[-1][:20]} {fmt_tps(s['medianTps'])}" for s in METRICS.snapshot()[:4] if s["medianTps"] is not None)
         self.console.print(
             f"[dim]--- approved {m.session_approved}/{m.target_count}, started {m.total_attempts}, discarded {m.discard_count}, "
-            f"{m.total_tokens / 1000:.0f}k tokens | {where}{more}[/dim]"
+            f"{m.total_tokens / 1000:.0f}k tokens | {where}{more}{' | ' + speeds if speeds else ''}[/dim]"
         )
 
     def _on_note(self, attempt: int, text: str) -> None:
@@ -600,9 +629,18 @@ class RunBoard:
         return Text.from_markup("[bold]Now on:[/bold] " + "   ".join(parts))
 
     def visible_rows(self) -> int:
-        """How many sample rows fit under the progress bar, counters, tally, table header and the key hint."""
+        """How many sample rows fit under the progress bar, counters, tally, speed table, table header and the key hint."""
         height = self.console.size.height or 24
-        return max(3, height - 10)
+        speeds = len(METRICS.models) + 4 if self.show_speeds and METRICS.models else 0
+        return max(3, height - 10 - speeds)
+
+    def speeds(self):
+        """Inference speed per model, when asked for: calls, what is running now, latency and tokens per second."""
+        if self.plain or not self.show_speeds:
+            return Text("")
+        if not METRICS.models:
+            return Text.from_markup("[dim]Model speed: no calls yet.[/dim]")
+        return speed_table()
 
     def hint(self, shown: int, total: int) -> Text:
         if self.plain:
@@ -611,7 +649,7 @@ class RunBoard:
         if not self.keys.active:
             return Text.from_markup(f"[dim]{window}   keys are off, so this window cannot be moved[/dim]")
         state = " [yellow]stopping after these[/yellow]" if self.stop_requested else ""
-        return Text.from_markup(f"[dim]{window}   up and down scroll, page up and page down jump, home follows the oldest, q finishes and stops[/dim]{state}")
+        return Text.from_markup(f"[dim]{window}   up and down scroll, page up and page down jump, home follows the oldest, m {'hides' if self.show_speeds else 'shows'} model speeds, q finishes and stops[/dim]{state}")
 
     def table(self, max_rows: int | None = None) -> Table:
         table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False, expand=False)
@@ -639,7 +677,7 @@ class RunBoard:
     def __rich__(self):
         table = self.table()
         start, end = getattr(self, "window", (0, 0))
-        return Group(self.progress, self.counters(), self.tally(), table, self.hint(end - start, len(TRACKER)))
+        return Group(self.progress, self.counters(), self.tally(), self.speeds(), table, self.hint(end - start, len(TRACKER)))
 
 
 def _host_limits_line(runtime: PipelineRuntime) -> str:
@@ -704,12 +742,15 @@ async def amain() -> None:
     parser.add_argument("--no-judge2", action="store_true", help="disable the second-opinion judge")
     parser.add_argument("--dry-run", action="store_true", help="run one sample, print the record, write nothing")
     parser.add_argument("--plain", action="store_true", help="no live table, just printed lines, so the terminal scrolls and the output can be piped to a file")
+    parser.add_argument("--speeds", action="store_true", help="show inference speed per model on the board (the m key toggles it during a run)")
     parser.add_argument("--check", action="store_true", help="only run the preflight: one tiny request per model, then exit")
     parser.add_argument("--skip-preflight", action="store_true", help="start without checking that every model answers")
     args = parser.parse_args()
 
     config.require_api_key()
     config.ensure_dirs()
+    if not args.dry_run:
+        METRICS.enable_log(config.CALLS_LOG_PATH)   # one line per model call, for the dashboard
     runtime = build_runtime(lessons_enabled=not args.no_lessons, judge2_enabled=not args.no_judge2, seed=args.seed)
     graph = build_pipeline_graph(runtime)
 
@@ -741,7 +782,7 @@ async def amain() -> None:
     _print_banner(args, manager, runtime, concurrency)
 
     if args.dry_run:
-        with RunBoard(manager, to_add=1, existing=existing, console=console, plain=args.plain) as board:
+        with RunBoard(manager, to_add=1, existing=existing, console=console, plain=args.plain, show_speeds=args.speeds) as board:
             record = await manager.run_single_pipeline(board)
         if record is None:
             console.print("[bold red]The sample did not pass; see the reasons above.[/bold red]")
@@ -758,7 +799,7 @@ async def amain() -> None:
         return
 
     config.CONCURRENCY_CONTROLLER.setup(concurrency)
-    with RunBoard(manager, to_add=to_add, existing=existing, console=console, plain=args.plain) as board:
+    with RunBoard(manager, to_add=to_add, existing=existing, console=console, plain=args.plain, show_speeds=args.speeds) as board:
         board.log(
             "[dim]Each sample runs writer -> reviewer (-> editor, up to 3 rounds) -> analyzer -> validator -> judge -> second judge. "
             "Every line below is an agent's decision"
@@ -798,6 +839,9 @@ async def amain() -> None:
     table.add_row("Lessons stored", str(runtime.lessons.counts()))
     table.add_row("Judge reputation", ", ".join(f"{k}: {v['score']} ({v['agreed']} agreed, {v['overturned_pass']} passes and {v['overturned_fail']} fails overturned)" for k, v in runtime.reputation.snapshot().items()) or "-")
     console.print("\n", table)
+    if METRICS.models:
+        console.print("\n", speed_table("[bold green]Model speed this session[/bold green]"))
+        console.print(f"[dim]Every call is in {config.CALLS_LOG_PATH}; the dashboard charts it per model and per role.[/dim]")
     console.print("Next: [bold]python -m data_pipeline.scripts.build_splits[/bold] to dedup and split.")
 
 

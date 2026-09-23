@@ -109,6 +109,14 @@ The board takes keys while it runs: up and down scroll the table one sample, pag
 down a screen, home returns to following the oldest samples, and `q` finishes the samples in
 flight and stops without losing them (unlike Ctrl+C, which drops whatever is mid-flight).
 
+`--speeds` adds a table of inference speed per model to the board, and the `m` key shows or hides
+it during a run: calls so far, what is running now, median latency, median and latest tokens per
+second, errors and timeouts. The same figures close every run, and every call is written to
+`logs/calls.jsonl` with its latency, token counts, role and sample, which the dashboard turns
+into a per-model table, a speed-over-time chart and a per-role breakdown. Tokens per second is
+reply tokens over the whole call, so prompt processing and server queueing count against it: it
+is the speed the pipeline experiences, not the card's peak.
+
 `--plain` turns the live table off and prints only the lines, which is what you want when you
 need to scroll back through the history or pipe the run to a file; a status line then reports
 where every sample is every 30 seconds (`BOARD_HEARTBEAT_S`). The live board repaints in place,
