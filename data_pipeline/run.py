@@ -38,7 +38,7 @@ from rich.text import Text
 
 from data_pipeline import config
 from data_pipeline.agents.diversity_controller import EDGE_CASE_TYPES, generate_diversity_profile
-from data_pipeline.agents.llm_client import LLMCallError, acall_llm
+from data_pipeline.agents.llm_client import LLMCallError, acall_llm, cooldown_for
 from data_pipeline.contracts import PROMPT_VERSION, FeedbackReportSchema
 from data_pipeline.endpoints import Endpoint, EndpointPool
 from data_pipeline.graph import PipelineRuntime, build_pipeline_graph
@@ -311,7 +311,7 @@ class PipelineManager:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-PERMANENT_STATUSES = (401, 402, 403, 404)   # a key, a bill or a model id: retrying cannot help
+from data_pipeline.agents.llm_client import PERMANENT_STATUSES  # noqa: E402  a key, a bill or a model id: retrying cannot help
 
 
 def fatal_reason(error: Exception) -> str | None:
@@ -358,10 +358,9 @@ async def preflight(runtime: PipelineRuntime, console: Console) -> bool:
             await acall_llm(ep, [{"role": "user", "content": "Reply with the single word: ok"}], temperature=0.0, max_tokens=4, max_retries=1)
             return None, time.monotonic() - started
         except LLMCallError as e:
-            permanent = not e.retryable and e.status in PERMANENT_STATUSES
             if any(r in ("judge", "second judge") for r, other, _ in roles if key_of(other) == key_of(ep)):
                 pool = runtime.judge2_pool if runtime.judge2 is not None and runtime.judge2_pool and key_of(runtime.judge2) == key_of(ep) else runtime.judge_pool
-                pool.penalise(ep, 10 * 3600 if permanent else None)   # sidelined for the run, or for one cooldown
+                pool.penalise(ep, cooldown_for(e))   # hours for a dead key or an exhausted quota, one cooldown otherwise
             return str(e)[:140], time.monotonic() - started
         except Exception as e:  # noqa: BLE001
             return f"{type(e).__name__}: {e}"[:140], time.monotonic() - started

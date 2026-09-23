@@ -31,7 +31,7 @@ from data_pipeline import config
 from data_pipeline.agents.analyzer import analyze_journal_entry
 from data_pipeline.agents.editor import edit_journal_entry
 from data_pipeline.agents.judge import judge_candidate, judge_passes, judge_reason
-from data_pipeline.agents.llm_client import LLMCallError
+from data_pipeline.agents.llm_client import LLMCallError, cooldown_for
 from data_pipeline.agents.reviewer import review_journal_entry
 from data_pipeline.agents.schema_validator import validate_schema
 from data_pipeline.agents.writer import generate_journal_entry
@@ -145,7 +145,7 @@ async def judge_with_pool(runtime: PipelineRuntime, entry: str, analysis_json: d
                 verdict, usage = await judge_candidate(entry, analysis_json, persona, endpoint=ep, lessons=lessons)
                 return verdict, usage, ep
             except LLMCallError as e:
-                runtime.judge_pool.penalise(ep)
+                runtime.judge_pool.penalise(ep, cooldown_for(e))
                 tried.add(ep)
                 TRACKER.note(f"{ep.host} failed ({str(e)[:80]}); trying the next judge host")
         wait = runtime.judge_pool.seconds_until_available()
@@ -282,7 +282,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
             verdict, usage = await judge_candidate(state["entry"], state["analysis_json"], persona, endpoint=ep, lessons=runtime.lessons.top("judge"))
         except LLMCallError as e:
             if runtime.judge2 is None:
-                runtime.judge_pool.penalise(ep)
+                runtime.judge_pool.penalise(ep, cooldown_for(e))
             return {"judge2_verdict": {"skipped": str(e)[:200]}, "judge2_host": ep.host, "judge2_model": ep.model, "judge2_passed": None}
         first_passed = bool(state.get("first_judge_passed"))
         second_passed = judge_passes(verdict, runtime.reputation.threshold_bump(ep.label))

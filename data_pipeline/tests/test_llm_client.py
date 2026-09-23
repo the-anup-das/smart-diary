@@ -192,3 +192,13 @@ def test_calls_to_one_host_are_capped_while_other_hosts_proceed(monkeypatch, end
     elapsed = asyncio.run(run())
     assert clients["test.local"].peak == 1 and clients["other.local"].peak == 1     # one at a time per host
     assert elapsed < 0.2                                                            # but the two hosts ran side by side
+
+
+def test_cooldown_is_hours_for_a_dead_key_or_an_exhausted_quota():
+    from data_pipeline.agents.llm_client import LONG_COOLDOWN_S, LLMCallError, cooldown_for
+
+    assert cooldown_for(LLMCallError("403 project disabled", retryable=False, status=403)) == 10 * LONG_COOLDOWN_S
+    assert cooldown_for(LLMCallError("402 payment required", retryable=False, status=402)) == 10 * LONG_COOLDOWN_S
+    assert cooldown_for(LLMCallError("429: You exceeded your current quota", retryable=True, status=429)) == LONG_COOLDOWN_S
+    assert cooldown_for(LLMCallError("429 rate limit, slow down", retryable=True, status=429)) is None      # a burst: the pool's own cooldown
+    assert cooldown_for(LLMCallError("502 bad gateway", retryable=True, status=502)) is None

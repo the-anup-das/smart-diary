@@ -76,6 +76,20 @@ def _extras_rejected_error(e: Exception, extra: dict) -> bool:
 _RESPONSE_FORMAT_HINTS = ("response_format", "json_schema", "json_object", "structured", "not supported", "unsupported", "invalid")
 
 
+PERMANENT_STATUSES = (401, 402, 403, 404)   # a key, a bill, a permission or a model id: retrying cannot help
+LONG_COOLDOWN_S = 3600.0                      # for a host that is out of quota or permanently refusing
+
+
+def cooldown_for(error: "LLMCallError") -> float | None:
+    """How long a failing host should sit out: hours for a permanent refusal or an exhausted quota, else the pool's default."""
+    if error.status in PERMANENT_STATUSES:
+        return 10 * LONG_COOLDOWN_S
+    text = str(error).lower()
+    if error.status == 429 and ("quota" in text or "billing" in text or "exceeded your current" in text):
+        return LONG_COOLDOWN_S
+    return None
+
+
 class LLMCallError(RuntimeError):
     def __init__(self, message: str, *, retryable: bool, endpoint: Endpoint | None = None, status: int | None = None):
         super().__init__(message)
