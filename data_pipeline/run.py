@@ -753,6 +753,9 @@ async def amain() -> None:
         METRICS.enable_log(config.CALLS_LOG_PATH)   # one line per model call, for the dashboard
     runtime = build_runtime(lessons_enabled=not args.no_lessons, judge2_enabled=not args.no_judge2, seed=args.seed)
     graph = build_pipeline_graph(runtime)
+    for ep in [*runtime.writers, runtime.editor, runtime.reviewer, runtime.analyzer, *runtime.judge_pool.endpoints, runtime.judge2]:
+        if ep is not None:
+            METRICS.register(ep)   # every configured model and role is on the speed table from the first second
 
     if args.concurrency.lower() == "auto":
         local = any(h in config.LLM_BASE_URL for h in ("localhost", "127.0.0.1"))

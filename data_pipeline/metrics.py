@@ -21,7 +21,8 @@ from typing import Optional
 
 from data_pipeline.status import CURRENT_SAMPLE
 
-RECENT = 50   # calls kept per model for the rolling medians on the board
+RECENT = 50               # calls kept per model for the rolling medians on the board
+MIN_REPLY_FOR_SPEED = 16  # a four-token preflight probe is all prompt processing; it says nothing about generation speed
 
 
 @dataclass
@@ -96,6 +97,11 @@ class MetricsRegistry:
             stats.roles.add(str(ep.name))
         return stats
 
+    def register(self, ep) -> None:
+        """List a configured model with its role before any call, so the table shows what should be running, not only what has."""
+        with self._lock:
+            self._stats(ep)
+
     def start(self, ep) -> float:
         with self._lock:
             self._stats(ep).in_flight += 1
@@ -106,7 +112,7 @@ class MetricsRegistry:
         latency = max(0.0, time.monotonic() - started)
         prompt = int((usage or {}).get("prompt_tokens") or 0)
         completion = int((usage or {}).get("completion_tokens") or 0)
-        tps = (completion / latency) if (error is None and completion and latency > 0) else None
+        tps = (completion / latency) if (error is None and completion >= MIN_REPLY_FOR_SPEED and latency > 0) else None
         with self._lock:
             stats = self._stats(ep)
             stats.in_flight = max(0, stats.in_flight - 1)

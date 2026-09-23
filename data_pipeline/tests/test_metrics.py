@@ -90,3 +90,17 @@ def test_board_shows_speeds_on_request_and_the_m_key_toggles_them(tmp_path, monk
         console.print(speed_table("Model speed this session"))
     assert "Model speed this session" in cap.get()
     METRICS.reset()
+
+
+def test_configured_models_are_listed_before_any_call_and_probes_carry_no_speed():
+    reg = MetricsRegistry()
+    qwen_editor = Endpoint(base_url="http://endpoint/v1", api_key="k", model="qwen", name="editor")
+    qwen_judge = Endpoint(base_url="http://endpoint/v1", api_key="k", model="qwen", name="judge1")
+    for ep in (qwen_editor, qwen_judge):
+        reg.register(ep)
+    snap = reg.snapshot()
+    assert len(snap) == 1 and snap[0]["roles"] == ["editor", "judge1"] and snap[0]["calls"] == 0   # one model, both roles, nothing run yet
+    reg.finish(qwen_editor, reg.start(qwen_editor) - 0.8, usage={"prompt_tokens": 20, "completion_tokens": 4})     # a preflight probe
+    assert reg.snapshot()[0]["calls"] == 1 and reg.snapshot()[0]["medianTps"] is None and reg.snapshot()[0]["lastTps"] is None
+    reg.finish(qwen_judge, reg.start(qwen_judge) - 2.0, usage={"prompt_tokens": 900, "completion_tokens": 60})     # a real reply
+    assert 29 <= reg.snapshot()[0]["lastTps"] <= 31
