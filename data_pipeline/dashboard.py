@@ -65,10 +65,49 @@ def pct(part: float, whole: float) -> str:
     return f"{part / whole * 100:.0f}%" if whole else "-"
 
 
+RUN_GAP = pd.Timedelta(minutes=15)   # a pause this long between attempts starts a new run
+
+
+def label_runs(ts: pd.Series) -> pd.Series:
+    """Run number per row: attempts closer together than RUN_GAP belong to the same run."""
+    order = ts.sort_values()
+    run = (order.diff() > RUN_GAP).cumsum() + 1
+    return run.reindex(ts.index).fillna(0).astype(int)
+
+
 df = load_telemetry()
 if df.empty:
     st.warning("No telemetry yet. Run `python -m data_pipeline.run --count 5` first.")
     st.stop()
+
+# ---------------------------------------------------------------- which run
+df["run"] = label_runs(df["timestamp"])
+runs = (
+    df.groupby("run")
+    .agg(start=("timestamp", "min"), end=("timestamp", "max"), attempts=("status", "size"), approved=("status", lambda s: int((s == "PASSED").sum())))
+    .sort_index(ascending=False)
+)
+
+
+def run_label(run_id: int) -> str:
+    r = runs.loc[run_id]
+    return f"Run {run_id}: {r.start:%d %b %H:%M} to {r.end:%H:%M} UTC, {r.attempts} attempts, {r.approved} approved"
+
+
+choices = ["latest"] + [int(r) for r in runs.index] + ["all"]
+picked = st.sidebar.selectbox(
+    "Show", choices, index=0,
+    format_func=lambda c: "Latest run" if c == "latest" else "All runs" if c == "all" else run_label(c),
+    help="A run is a stretch of attempts without a pause of 15 minutes or more. Earlier runs stay in the logs; this only chooses what the page counts.",
+)
+if picked == "all":
+    window = (df["timestamp"].min(), df["timestamp"].max())
+else:
+    run_id = int(runs.index[0]) if picked == "latest" else int(picked)
+    df = df[df["run"] == run_id]
+    window = (runs.loc[run_id, "start"], runs.loc[run_id, "end"])
+st.sidebar.caption(f"{len(df):,} attempts from {window[0]:%d %b %H:%M} to {window[1]:%d %b %H:%M} UTC.")
+st.caption(("All runs. " if picked == "all" else run_label(run_id) + ". ") + "Pick another run in the sidebar.")
 
 total = len(df)
 passed = int((df["status"] == "PASSED").sum())
@@ -186,7 +225,9 @@ calls = pd.DataFrame(read_jsonl(CALLS_PATH))
 if calls.empty:
     st.write("No call log yet. Every model call a run makes is written to `logs/calls.jsonl` with its latency and tokens per second.")
 else:
-    calls["timestamp"] = pd.to_datetime(calls["timestamp"], errors="coerce")
+    calls["timestamp"] = pd.to_datetime(calls["timestamp"], errors="coerce", utc=True)
+    slack = pd.Timedelta(minutes=5)
+    calls = calls[(calls["timestamp"] >= window[0] - slack) & (calls["timestamp"] <= window[1] + slack)]
     calls["label"] = calls["model"].fillna("?") + "@" + calls["host"].fillna("?")
     calls["ok"] = calls["ok"].fillna(False).astype(bool)
     calls["timeout"] = calls["timeout"].fillna(False).astype(bool)
