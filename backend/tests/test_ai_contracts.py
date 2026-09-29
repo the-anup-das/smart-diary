@@ -7,7 +7,7 @@ from ai_contracts import analysis as c
 
 # Pinned on purpose. If this fails you changed the prompt or the schema: bump PROMPT_VERSION,
 # update the hash here, and expect the analysis cache to refill.
-PINNED_PROMPT_SHA256 = "ef42dbf02eb760f0f58fa255129904e39c65868a00874d559486de58d12043b5"
+PINNED_PROMPT_SHA256 = "96241b083c6dfc66b800e36d0be060b7cfcab3ed4a273afc26cbfb823294cc8f"
 
 
 def _good_report() -> c.FeedbackReportSchema:
@@ -29,7 +29,7 @@ def _good_report() -> c.FeedbackReportSchema:
 
 def test_prompt_hash_is_pinned():
     assert c.PROMPT_SHA256 == PINNED_PROMPT_SHA256
-    assert c.PROMPT_VERSION == "2026.09-v3"
+    assert c.PROMPT_VERSION == "2026.09-v4"
 
 
 def test_prompt_carries_every_enum_value_and_the_topic_vocabulary():
@@ -92,7 +92,7 @@ def test_distress_rule_names_the_passive_signals():
     prompt = c.build_analysis_system_prompt()
     for signal in ("wanting to disappear", "not wanting to wake up", "better off without you", "not seeing how to keep going"):
         assert signal in prompt
-    assert "this job is killing me" in prompt and "When unsure" in prompt
+    assert "this job is killing me" in prompt and "could be literal" in prompt
 
 
 def test_generic_sentiment_and_unlisted_grammar_errors_are_rule_breaks():
@@ -109,3 +109,11 @@ def test_generic_sentiment_and_unlisted_grammar_errors_are_rule_breaks():
     base["grammarScore"] = 9
     assert c.check_business_rules(c.FeedbackReportSchema.model_validate(base)) == []
     assert "scores 7 or lower" in c.build_analysis_system_prompt()
+
+
+def test_v4_idioms_are_venting_and_fog_is_the_writers_own_attention():
+    prompt = c.build_analysis_system_prompt()
+    assert "crawl into a hole" in prompt and "are venting even though they mention dying" in prompt
+    assert "When unsure" not in prompt and "own life or existence could be literal" in prompt
+    assert "stress, worry or tiredness alone is not fog" in prompt and "not other people's" in prompt
+    assert "cannot switch it off" in prompt

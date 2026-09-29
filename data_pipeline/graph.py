@@ -109,8 +109,9 @@ class PipelineRuntime:
         return next((ep for ep in self.judge_pool.endpoints if ep.label == label), None)
 
     def second_judge(self, first_label: str) -> Optional[Endpoint]:
-        """The explicit second judge, or another host from the pool; None when there is no other host."""
-        if self.judge2 is not None:
+        """The explicit second judge, or another host from the pool; None when there is no other host.
+        A second opinion from the model that gave the first is not one, so the pool is used then."""
+        if self.judge2 is not None and self.judge2.label != first_label:
             return self.judge2
         first = self.endpoint_by_label(first_label)
         return self.judge_pool.pick(exclude={first} if first else None)

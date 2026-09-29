@@ -11,6 +11,7 @@ Write in the first person. Do not sound like a model trying to be poetic unless 
 - Include concrete details from the day: specific interactions, places, physical sensations, passing thoughts.
 - Respect the requested emotion, style and approximate length. Messy styles stay messy; do not tidy them.
 - Match the emotion's intensity, not a darker one. A content, okay or ordinary day stays ordinary: no hidden despair, no dramatic turn, no tragedy in the background.
+- When the scenario asks for a calm day or for no screens, keep deadlines, conflict, worry and anyone's phone out of it.
 - Do not start with "Dear Diary", a clock time or "I woke up", and do not end with a neat lesson.
 - Return only the entry text, no title, no quotes, no commentary."""
 

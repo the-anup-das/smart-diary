@@ -131,11 +131,11 @@ def test_the_judges_own_reading_catches_contradictions_it_would_otherwise_pass()
     assert cross_check(looping, analysis)[0].startswith("ruminationLevel 'low' contradicts")
     assert cross_check(good_verdict(own_rumination="moderate"), analysis) == []   # neighbours are not a contradiction
 
-    crisis = good_verdict(own_distress=True)
+    crisis = good_verdict(own_distress=True, safety=9)            # the grading judge had doubts too
     failed = apply_cross_check(crisis, analysis)
     assert failed["hard_fail"] and not judge_passes(failed) and "passive wish to die" in failed["hard_fail_reason"]
     assert failed["label_notes"].startswith("distressFlag is false")   # the analyzer gets told what to repair
-    assert cross_check(good_verdict(own_distress=False), dict(analysis, distressFlag=True)) == ["distressFlag is true but the entry shows no crisis signal"]
+    assert cross_check(good_verdict(own_distress=False, safety=9), dict(analysis, distressFlag=True)) == ["distressFlag is true but the entry shows no crisis signal"]
 
 
 def test_calibration_reports_the_pipeline_as_a_whole(monkeypatch):
@@ -206,3 +206,26 @@ def test_calibration_grades_a_wrong_reference_as_a_teacher_error(monkeypatch):
     assert pipe["correct"] == {"passed": 1, "failed": 0, "errors": 0}       # the real correct one passed
     assert pipe["teacher_error"]["failed"] == 1                              # failing the teacher's mistake counts as right
     assert results["_rejected_correct"]["j@a"] == []                         # and is not listed as a false rejection
+
+
+def test_a_blind_crisis_reading_needs_the_grading_judges_doubt():
+    """v3 data: the blind reader called 'die of embarrassment' a crisis, the cross-check failed the correct
+    label, and the repair flipped it to true. A confident grading judge now outweighs the reader."""
+    from conftest import good_analysis, good_verdict
+
+    from data_pipeline.agents.judge import cross_check
+
+    analysis = good_analysis()                                              # distressFlag false
+    confident = good_verdict(own_distress=True, safety=10)
+    assert cross_check(confident, analysis) == []                           # reader over-read an idiom; grader sure: no fail
+    doubtful = good_verdict(own_distress=True, safety=9)
+    assert "passive wish to die" in cross_check(doubtful, analysis)[0]      # grader had doubts too: fail
+
+
+def test_the_same_model_is_never_its_own_second_opinion(tmp_path):
+    from test_graph_flow import _ep, _runtime
+
+    nova_lite = _ep("nova-lite", "gateway")
+    runtime = _runtime(tmp_path, judges=[_ep("gpt-oss", "local"), nova_lite], judge2=nova_lite)
+    assert runtime.second_judge("gpt-oss@local") is nova_lite
+    assert runtime.second_judge(nova_lite.label).label == "gpt-oss@local"  # the fallback judged first: use the pool

@@ -19,7 +19,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
-PROMPT_VERSION = "2026.09-v3"   # v3: distress names the passive signals; grammar is scored as written
+PROMPT_VERSION = "2026.09-v4"   # v4: idioms are venting; fog is the writer's own attention; rumination has a scale
 
 # Controlled vocabulary for topics. The schema keeps `topic` as a free string because
 # existing rows hold free-form values, but the prompt asks for these and the energy
@@ -157,14 +157,17 @@ _BASE_PROMPT = (
     "4. Emotions: name 1-3 precise emotion words the writer expresses (granularity over generic terms).\n"
     "5. Safety: set distressFlag true for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die "
     "or vanish: wanting to disappear, not wanting to wake up, feeling others would be better off without you, "
-    "not seeing how to keep going. Keep it false for ordinary sadness, stress, anger and figurative venting "
-    "('this job is killing me', 'I could die of embarrassment'). When unsure whether a line is a passive wish "
-    "to die or venting, set it true.\n"
-    "6. Stimulation: record compulsive or high-stimulation behaviours ONLY when the entry mentions them "
+    "not seeing how to keep going. Keep it false for ordinary sadness, stress, anger and figurative venting: "
+    "idioms that exaggerate a feeling ('this job is killing me', 'I could die of embarrassment', 'I want to crawl "
+    "into a hole', 'kill me now') are venting even though they mention dying. When a line about the writer's own "
+    "life or existence could be literal, set it true.\n"
+    "6. Stimulation: record the writer's own compulsive or high-stimulation behaviours (not other people's) ONLY when the entry mentions them "
     "(scrolling, social media, video, gaming, porn, gambling, food, shopping, substances), with trigger, time of day, "
     "loss of control, the after-state, sleep impact and what was displaced. If nothing is mentioned, return an empty "
     "list, afterState 'none' and load 0. Never diagnose; describe behaviour.\n"
-    "7. Mind: note attention trouble or brain fog the writer describes, minutes of passive feed or video consumption "
+    "7. Mind: fogOrAttention is true only when the writer describes their own attention failing (can't focus on a "
+    "task, reads the same line again, loses the thread, head like cotton wool); stress, worry or tiredness alone is not "
+    "fog. Note minutes of passive feed or video consumption "
     "only when stated, whether short-form video is mentioned, and brain-building activities that actually happened "
     "(deep reading, learning, creating, deep work, exercise, nature, conversation, play, rest, sleep). brainRotLoad 0 "
     "when nothing relevant is mentioned. Describe, never diagnose."
@@ -177,7 +180,8 @@ def _field_guide() -> str:
     return (
         "\n\nField guide, use these exact values:\n"
         f"- topics[].topic: prefer {join(TOPIC_VOCAB)}; weights sum to 1.0.\n"
-        f"- energyAnalysis.ruminationLevel: one of {join(RUMINATION_LEVELS)}.\n"
+        f"- energyAnalysis.ruminationLevel: one of {join(RUMINATION_LEVELS)}. low: no worry, or one mentioned and left; "
+        "moderate: a worry that comes back a few times; high: the writer replays it and cannot switch it off.\n"
         f"- energyAnalysis.microActions: exactly {MICRO_ACTIONS_REQUIRED} items, each with a unique id.\n"
         f"- emotionLabels: {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX} words.\n"
         "- grammarScore: score the text as written, not as meant. 10 only for error-free text; casual phone-typed "

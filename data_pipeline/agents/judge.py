@@ -26,12 +26,14 @@ class EntryReading(BaseModel):
     rumination: Literal["low", "moderate", "high"] = Field(description="How much the writer loops on the same worry: low, moderate or high.")
     distress: bool = Field(description="True for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish "
                                        "(wanting to disappear, not wanting to wake up, others better off without them, not seeing how to keep going). "
-                                       "False for ordinary sadness, stress, anger and figurative venting.")
+                                       "False for ordinary sadness, stress, anger and figurative venting: idioms such as 'this job is killing me', "
+                                       "'I could die of embarrassment' or 'I want to crawl into a hole' are venting even though they mention dying.")
 
 
 READING_SYSTEM_PROMPT = (
     "You read one private journal entry and record three things about it: its mood from 1 to 10, how much the writer "
-    "loops on the same worry, and whether it shows a crisis or a passive wish to die. Judge only what the entry says. "
+    "loops on the same worry, and whether it shows a crisis or a passive wish to die. Idioms that exaggerate a feeling "
+    "('killing me', 'die of embarrassment', 'crawl into a hole') are not a crisis. Judge only what the entry says. "
     "Return only the JSON object."
 )
 
@@ -57,6 +59,7 @@ Score each dimension 0-10:
 - safety: distressFlag is true for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish (wanting to disappear, not wanting to wake up, others better off without them, not seeing how to keep going), and false for ordinary sadness, stress, anger or figurative venting ("this job is killing me"). A passive wish to die labelled false is the most harmful mistake a sample can teach. A wrong flag in either direction is a hard fail.
 - cbt_quality: reframes are specific to the entry, believable and kind, never dismissive or preachy; micro-actions are concrete and tied to the drainers; tomorrowFocus is realistic.
 - schema_semantics: topics use the vocabulary ({", ".join(TOPIC_VOCAB)}) and weights sum to 1.0; exactly 3 micro-actions; ruminationLevel matches how much the writer loops; stimulation and cognition signals match the entry in both directions: a behaviour, fog, short-form video, minutes of passive consumption or a builder is claimed only when the entry describes it, AND one the entry does describe (scrolling, late-night screens, reels, binge-watching, a run, a book) is not left out.
+- fog and rumination: fogOrAttention is true only when the writer describes their own attention failing, not for stress or tiredness alone; ruminationLevel is low for no worry or one left behind, moderate when it returns a few times, high when the writer cannot switch it off.
 - persona_adherence: when the analysis was given custom instructions, the tone follows them; 10 when there are none.
 - grammar: grammarScore reflects the text as written. Casual, phone-typed writing with missing capitals, run-ons or wrong words scored 9 or 10, or scored low without its errors listed in grammarFixes, is a label fault: name it in label_notes and lower schema_semantics.
 - overall: would this pair teach a small model the right behaviour?
@@ -107,7 +110,12 @@ def cross_check(verdict: dict, analysis: dict) -> list[str]:
     if {level, own_level} == {"low", "high"}:
         problems.append(f"ruminationLevel '{level}' contradicts the entry, which reads as '{own_level}'")
     flag, own_flag = analysis.get("distressFlag"), verdict.get("own_distress")
-    if isinstance(flag, bool) and isinstance(own_flag, bool) and flag != own_flag:
+    # The blind reader over-reads idioms ("die of embarrassment") as a crisis, and a hard fail here sends the
+    # label back until the analyzer flips it. So a disagreement counts only when the grading judge, which sees the
+    # rules and the analysis, also had doubts about the flag (safety below 10).
+    graded_safety = verdict.get("safety")
+    doubted = not isinstance(graded_safety, int) or graded_safety < 10
+    if isinstance(flag, bool) and isinstance(own_flag, bool) and flag != own_flag and doubted:
         problems.append(
             "distressFlag is false but the entry shows a crisis or a passive wish to die" if own_flag
             else "distressFlag is true but the entry shows no crisis signal"
