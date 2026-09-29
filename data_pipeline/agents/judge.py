@@ -14,18 +14,29 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Field
 
 from data_pipeline import config
-from data_pipeline.agents.llm_client import acall_structured, as_text
+from data_pipeline.agents.llm_client import _add_usage, acall_structured, as_text
 from data_pipeline.contracts import PERSONA_HEADER, TOPIC_VOCAB
 from data_pipeline.endpoints import Endpoint
 
 
+class EntryReading(BaseModel):
+    """What a judge reads in the entry before it is shown any analysis. Asked in a separate call: a field
+    filled beside the analysis gets copied from it, and then it can never catch the analysis being wrong."""
+    mood: int = Field(ge=1, le=10, description="The entry's mood, 1 (lowest) to 10 (best).")
+    rumination: Literal["low", "moderate", "high"] = Field(description="How much the writer loops on the same worry: low, moderate or high.")
+    distress: bool = Field(description="True for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish "
+                                       "(wanting to disappear, not wanting to wake up, others better off without them, not seeing how to keep going). "
+                                       "False for ordinary sadness, stress, anger and figurative venting.")
+
+
+READING_SYSTEM_PROMPT = (
+    "You read one private journal entry and record three things about it: its mood from 1 to 10, how much the writer "
+    "loops on the same worry, and whether it shows a crisis or a passive wish to die. Judge only what the entry says. "
+    "Return only the JSON object."
+)
+
+
 class JudgeVerdict(BaseModel):
-    # Filled from the entry alone, before the analysis's numbers are looked at. Code compares them with
-    # the labels, because a judge reading the analysis as a whole does not reliably notice a mood of 9
-    # on a despairing entry or "low" rumination on an entry that loops all night.
-    own_mood: int = Field(ge=1, le=10, description="From the entry alone: its mood, 1 (lowest) to 10 (best).")
-    own_rumination: Literal["low", "moderate", "high"] = Field(description="From the entry alone: how much the writer loops on the same worry.")
-    own_distress: bool = Field(description="From the entry alone: self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish?")
     grounding: int = Field(ge=0, le=10, description="Every claim in the analysis is supported by the entry; nothing invented.")
     safety: int = Field(ge=0, le=10, description="distressFlag is correct: true only for acute crisis or self-harm signals, false for ordinary venting.")
     cbt_quality: int = Field(ge=0, le=10, description="Reframes are specific, kind, believable and grounded in CBT; micro-actions are concrete and tied to the drainers.")
@@ -40,9 +51,6 @@ class JudgeVerdict(BaseModel):
 
 JUDGE_SYSTEM_PROMPT = f"""You are the quality gate for a dataset that teaches a small model to analyse private journal entries.
 You receive a journal entry and the analysis a teacher model produced for it. Grade the pair strictly.
-
-Work in two steps. First read ONLY the journal entry and fill own_mood, own_rumination and own_distress
-from it, as if no analysis existed. Then read the analysis and grade it.
 
 Score each dimension 0-10:
 - grounding: every claim in the analysis is supported by the entry. Invented facts, feelings or events score low.
@@ -123,11 +131,23 @@ def apply_cross_check(verdict: dict, analysis: dict) -> dict:
 
 async def judge_candidate(entry: str, analysis_json: dict, custom_persona: str | None, *, endpoint: Endpoint, lessons: list[str] | None = None) -> tuple[dict, dict]:
     """Returns (verdict, usage). An unparseable verdict is a fail."""
+    reading, reading_usage = await read_entry(entry, endpoint=endpoint)
     messages = build_judge_messages(entry, analysis_json, custom_persona, lessons)
     result = await acall_structured(endpoint, messages, JudgeVerdict, temperature=0.0, max_tokens=config.MAX_TOKENS_JUDGE)
+    usage = _add_usage(reading_usage, result.usage)
     if result.parsed is None:
-        return fail_closed(f"judge output unparseable: {result.error}"), result.usage
-    return apply_cross_check(result.parsed.model_dump(), analysis_json), result.usage
+        return fail_closed(f"judge output unparseable: {result.error}"), usage
+    verdict = result.parsed.model_dump()
+    if reading is not None:
+        verdict.update(own_mood=reading["mood"], own_rumination=reading["rumination"], own_distress=reading["distress"])
+    return apply_cross_check(verdict, analysis_json), usage
+
+
+async def read_entry(entry: str, *, endpoint: Endpoint) -> tuple[dict | None, dict]:
+    """The judge's blind reading of the entry. None when it cannot be read; the grading still happens."""
+    messages = [{"role": "system", "content": READING_SYSTEM_PROMPT}, {"role": "user", "content": f'"""{entry}"""'}]
+    result = await acall_structured(endpoint, messages, EntryReading, temperature=0.0, max_tokens=config.MAX_TOKENS_READING)
+    return (result.parsed.model_dump() if result.parsed is not None else None), result.usage
 
 
 def judge_passes(verdict: dict, threshold_bump: int = 0) -> bool:

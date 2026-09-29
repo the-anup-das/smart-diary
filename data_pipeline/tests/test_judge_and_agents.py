@@ -17,6 +17,25 @@ def _structured(parsed=None, data=None, error=None):
     return fake
 
 
+READING = {"mood": 6, "rumination": "low", "distress": False}
+
+
+def _by_schema(**parsed_by_name):
+    """A fake structured call that answers each schema with its own reply, and records every call."""
+    calls = []
+
+    async def fake(ep, messages, schema, **kw):
+        calls.append((schema.__name__, messages))
+        fake.messages = messages
+        fake.schema = schema
+        parsed = parsed_by_name.get(schema.__name__)
+        instance = schema.model_validate(parsed) if parsed is not None else None
+        return StructuredResult(parsed, instance, None if parsed is not None else "no JSON object", "", {"tokens": 1, "cost": 0.0, "model": ep.model, "host": ep.host}, "json_schema", messages)
+
+    fake.calls = calls
+    return fake
+
+
 def test_judge_passes_needs_overall_and_safety_and_no_hard_fail():
     assert judge.judge_passes(good_verdict())
     assert not judge.judge_passes(good_verdict(overall=config.JUDGE_THRESHOLD - 1))
@@ -34,7 +53,7 @@ def test_judge_fails_closed_on_unparseable_output(monkeypatch, endpoint):
 
 
 def test_judge_prompt_carries_entry_analysis_and_persona(monkeypatch, endpoint):
-    fake = _structured(parsed=good_verdict())
+    fake = _by_schema(EntryReading=READING, JudgeVerdict=good_verdict())
     monkeypatch.setattr(judge, "acall_structured", fake)
     verdict, _ = asyncio.run(judge.judge_candidate("I scrolled until 2am.", good_analysis(), "be blunt", endpoint=endpoint))
     assert judge.judge_passes(verdict)
@@ -142,3 +161,24 @@ def test_calibration_reports_the_pipeline_as_a_whole(monkeypatch):
     assert pipe["flipped_distress"]["failed"] == 1                  # one judge caught it, so the pipeline did
     assert pipe["topic_weights_half"]["failed"] == 1 and pipe["two_micro_actions"]["failed"] == 1   # the validator's, not the judges'
     assert results[lenient.label]["topic_weights_half"]["passed"] == 1                              # a judge alone missed it
+
+
+def test_the_judges_reading_is_blind_to_the_analysis(monkeypatch, endpoint):
+    """Asked beside the analysis, a judge copies its numbers; asked alone, it can disagree with them."""
+    fake = _by_schema(EntryReading=dict(READING, mood=2), JudgeVerdict=good_verdict())
+    monkeypatch.setattr(judge, "acall_structured", fake)
+    analysis = dict(good_analysis(), moodScore=9)
+    verdict, usage = asyncio.run(judge.judge_candidate("Could not get out of bed. Everything is grey.", analysis, None, endpoint=endpoint))
+    (first_schema, first_messages), (second_schema, _) = fake.calls
+    assert (first_schema, second_schema) == ("EntryReading", "JudgeVerdict")
+    blind = " ".join(m["content"] for m in first_messages)
+    assert "Everything is grey" in blind and "moodScore" not in blind          # the entry, and nothing of the analysis
+    assert verdict["own_mood"] == 2 and verdict["hard_fail"] and "moodScore 9 contradicts" in verdict["hard_fail_reason"]
+    assert usage["tokens"] == 2                                                # both calls are counted
+
+
+def test_a_failed_reading_still_leaves_the_grading(monkeypatch, endpoint):
+    fake = _by_schema(JudgeVerdict=good_verdict())                             # the reading call returns nothing usable
+    monkeypatch.setattr(judge, "acall_structured", fake)
+    verdict, _ = asyncio.run(judge.judge_candidate("A quiet day.", good_analysis(), None, endpoint=endpoint))
+    assert judge.judge_passes(verdict) and "cross_check" not in verdict

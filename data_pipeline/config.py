@@ -164,6 +164,7 @@ MAX_TOKENS_ENTRY = _int("MAX_TOKENS_ENTRY", 900)
 MAX_TOKENS_REVIEW = _int("MAX_TOKENS_REVIEW", 400)
 MAX_TOKENS_ANALYSIS = _int("MAX_TOKENS_ANALYSIS", 2048)
 MAX_TOKENS_JUDGE = _int("MAX_TOKENS_JUDGE", 800)
+MAX_TOKENS_READING = _int("MAX_TOKENS_READING", 400)   # the judge's blind reading: three values, room for a reasoning model
 REQUEST_TIMEOUT_S = _float("REQUEST_TIMEOUT_S", 180.0)   # a 30B model writing a full analysis can take a while under load
 
 # How many requests one server may be generating at once. A 30B model that fills most of a card

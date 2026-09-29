@@ -30,7 +30,7 @@ from rich.table import Table  # noqa: E402
 
 from data_pipeline import config  # noqa: E402
 from data_pipeline.agents.analyzer import analyze_journal_entry  # noqa: E402
-from data_pipeline.agents.judge import judge_candidate, judge_passes  # noqa: E402
+from data_pipeline.agents.judge import judge_candidate, judge_passes, judge_reason  # noqa: E402
 from data_pipeline.agents.llm_client import LLMCallError  # noqa: E402
 from data_pipeline.agents.schema_validator import validate_schema  # noqa: E402
 from data_pipeline.endpoints import parse_endpoint_list  # noqa: E402
@@ -119,13 +119,17 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
             cases[(index, name)] = bad
     validator_ok = {key: validate_schema(analysis)[0] for key, analysis in cases.items()}
     verdicts: dict[tuple[int, str], list] = {key: [] for key in cases}
+    explanations: dict[str, list[str]] = {}
 
     for ep in judges:
         tasks = [grade(ep, index, rows[index], name, analysis) for (index, name), analysis in cases.items()]
         graded = await asyncio.gather(*tasks)
         summary: dict[str, dict] = {}
+        rejected: list[str] = []
         for index, name, passed, _verdict in graded:
             verdicts[(index, name)].append(passed)
+            if name == "correct" and passed is False:
+                rejected.append(judge_reason(_verdict))
             slot = summary.setdefault(name, {"passed": 0, "failed": 0, "errors": 0})
             if passed is None:
                 slot["errors"] += 1
@@ -134,6 +138,7 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
             else:
                 slot["failed"] += 1
         results[ep.label] = summary
+        explanations[ep.label] = rejected
 
     # The pipeline: a sample passes only when the validator accepts it and every judge that answered passes it.
     pipeline: dict[str, dict] = {}
@@ -147,6 +152,7 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
         else:
             slot["failed"] += 1
     results["pipeline: validator + all judges"] = pipeline
+    results["_rejected_correct"] = explanations
     return results
 
 
@@ -158,6 +164,8 @@ def print_results(results: dict) -> None:
         table.add_column(name.replace("_", " "), justify="right")
     table.add_column("score", justify="right", style="bold")
     for label, summary in results.items():
+        if label.startswith("_"):
+            continue
         cells, score_parts = [], []
         for name in names:
             slot = summary.get(name, {})
@@ -177,6 +185,11 @@ def print_results(results: dict) -> None:
     console.print(table)
     console.print("A judge scores well when it passes correct analyses and fails every corruption. Errors mean the host could not be reached.")
     console.print("The pipeline row is what a real run does: the validator rejects rule breaks before any judge sees them, and a fail from any judge is a fail.")
+    for label, reasons in (results.get("_rejected_correct") or {}).items():
+        if reasons:
+            console.print(f"\n[bold]{label}[/bold] rejected {len(reasons)} correct analyses:")
+            for reason in reasons:
+                console.print(f"  - {reason[:200]}")
 
 
 def main() -> None:
