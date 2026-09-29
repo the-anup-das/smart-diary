@@ -19,7 +19,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, Field
 
-PROMPT_VERSION = "2026.09-v2"
+PROMPT_VERSION = "2026.09-v3"   # v3: distress names the passive signals; grammar is scored as written
 
 # Controlled vocabulary for topics. The schema keeps `topic` as a free string because
 # existing rows hold free-form values, but the prompt asks for these and the energy
@@ -34,7 +34,7 @@ TOPIC_VOCAB: tuple[str, ...] = (
 TOPIC_WEIGHT_TOLERANCE = 0.05
 MICRO_ACTIONS_REQUIRED = 3
 EMOTION_LABELS_MIN, EMOTION_LABELS_MAX = 1, 3
-GRAMMAR_FIXES_REQUIRED_BELOW = 5   # a low grammar score with no listed fix is an inconsistent label
+GRAMMAR_FIXES_REQUIRED_BELOW = 9   # a score below 9 names errors, so it must list them
 
 
 class GrammarFix(BaseModel):
@@ -115,7 +115,7 @@ class FeedbackReportSchema(BaseModel):
     repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
     detectedDecision: str | None = Field(default=None, description="If the user is struggling with a specific decision (e.g., 'Should I quit my job?'), summarize the topic here. Otherwise null.")
     emotionLabels: list[str] = Field(description="1-3 precise emotion words the writer is expressing (e.g. 'overwhelmed', 'wistful', 'resentful', 'proud'). Granular words, not generic ones like 'bad' or 'sad' unless truly the best fit.")
-    distressFlag: bool = Field(description="True ONLY when the entry contains clear signals of self-harm, suicidal thoughts, or acute crisis (e.g. hopelessness about being alive, wanting to disappear or end things). Ordinary sadness, stress, anger, or venting must be False.")
+    distressFlag: bool = Field(description="True for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish (wanting to disappear, not wanting to wake up, others better off without you, not seeing how to keep going). Ordinary sadness, stress, anger and figurative venting are False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
     stimulation: StimulationSignalsSchema = Field(description="Reward-seeking and overstimulation signals, only from what the entry explicitly says.")
     cognition: CognitionSignalsSchema = Field(description="Attention, brain fog, passive consumption and brain-building activities, only from what the entry explicitly says.")
@@ -155,8 +155,11 @@ _BASE_PROMPT = (
     "Provide a 1-sentence reframe/tip for each. Give a rumination coaching line. "
     "Generate 3 topic-tailored micro-actions and a 'tomorrowFocus' strategy.\n"
     "4. Emotions: name 1-3 precise emotion words the writer expresses (granularity over generic terms).\n"
-    "5. Safety: set distressFlag true ONLY for clear self-harm/suicidal/acute-crisis signals — "
-    "never for ordinary sadness, stress, or venting.\n"
+    "5. Safety: set distressFlag true for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die "
+    "or vanish: wanting to disappear, not wanting to wake up, feeling others would be better off without you, "
+    "not seeing how to keep going. Keep it false for ordinary sadness, stress, anger and figurative venting "
+    "('this job is killing me', 'I could die of embarrassment'). When unsure whether a line is a passive wish "
+    "to die or venting, set it true.\n"
     "6. Stimulation: record compulsive or high-stimulation behaviours ONLY when the entry mentions them "
     "(scrolling, social media, video, gaming, porn, gambling, food, shopping, substances), with trigger, time of day, "
     "loss of control, the after-state, sleep impact and what was displaced. If nothing is mentioned, return an empty "
@@ -177,7 +180,9 @@ def _field_guide() -> str:
         f"- energyAnalysis.ruminationLevel: one of {join(RUMINATION_LEVELS)}.\n"
         f"- energyAnalysis.microActions: exactly {MICRO_ACTIONS_REQUIRED} items, each with a unique id.\n"
         f"- emotionLabels: {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX} words.\n"
-        f"- grammarScore: 10 is flawless; a score below {GRAMMAR_FIXES_REQUIRED_BELOW} must come with grammarFixes listing the errors.\n"
+        "- grammarScore: score the text as written, not as meant. 10 only for error-free text; casual phone-typed "
+        "writing with missing capitals, run-on sentences, missing apostrophes, slang spellings or wrong words scores 7 or "
+        f"lower. A score below {GRAMMAR_FIXES_REQUIRED_BELOW} lists each error in grammarFixes.\n"
         "- sentiment: one specific feeling word such as Stressed, Anxious, Wistful, Calm, Proud; never 'positive', 'negative' or 'mixed'.\n"
         f"- stimulation.behaviours[].category: one of {join(STIMULATION_CATEGORIES)}; "
         f"timeOfDay: one of {join(TIMES_OF_DAY)}; stimulation.afterState: one of {join(AFTER_STATES)}.\n"
@@ -187,6 +192,7 @@ def _field_guide() -> str:
 
 
 PERSONA_HEADER = "USER'S CUSTOM INSTRUCTIONS: "
+GENERIC_SENTIMENTS = frozenset({"positive", "negative", "mixed", "neutral"})
 
 
 def build_analysis_system_prompt(custom_persona: str = "") -> str:
@@ -233,6 +239,8 @@ def check_business_rules(report: FeedbackReportSchema) -> list[str]:
     n_actions = len(report.energyAnalysis.microActions)
     if n_actions != MICRO_ACTIONS_REQUIRED:
         problems.append(f"energyAnalysis.microActions has {n_actions} items; exactly {MICRO_ACTIONS_REQUIRED} are required")
+    if report.sentiment.strip().lower() in GENERIC_SENTIMENTS:
+        problems.append(f"sentiment '{report.sentiment}' is too generic; name one specific feeling such as Stressed, Wistful or Calm")
     n_emotions = len(report.emotionLabels)
     if not (EMOTION_LABELS_MIN <= n_emotions <= EMOTION_LABELS_MAX):
         problems.append(f"emotionLabels has {n_emotions} items; give {EMOTION_LABELS_MIN} to {EMOTION_LABELS_MAX}")

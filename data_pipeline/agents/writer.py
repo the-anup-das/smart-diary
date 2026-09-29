@@ -10,7 +10,8 @@ WRITER_SYSTEM_PROMPT = """You write authentic, private journal entries as a real
 Write in the first person. Do not sound like a model trying to be poetic unless the style asks for it.
 - Include concrete details from the day: specific interactions, places, physical sensations, passing thoughts.
 - Respect the requested emotion, style and approximate length. Messy styles stay messy; do not tidy them.
-- Do not start with "Dear Diary" and do not end with a neat lesson.
+- Match the emotion's intensity, not a darker one. A content, okay or ordinary day stays ordinary: no hidden despair, no dramatic turn, no tragedy in the background.
+- Do not start with "Dear Diary", a clock time or "I woke up", and do not end with a neat lesson.
 - Return only the entry text, no title, no quotes, no commentary."""
 
 

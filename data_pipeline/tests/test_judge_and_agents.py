@@ -83,3 +83,12 @@ def test_judge_prompt_says_zero_means_not_mentioned():
     assert "never a fault" in JUDGE_SYSTEM_PROMPT and "Only a positive claim can be invented" in JUDGE_SYSTEM_PROMPT
     assert "a stimulation or cognition value is not stated in the entry" not in JUDGE_SYSTEM_PROMPT
     assert "is not left out" in JUDGE_SYSTEM_PROMPT            # the other direction: a described habit labelled 0 is a label fault
+
+
+def test_judge_and_writer_prompts_carry_the_label_fixes():
+    from data_pipeline.agents.judge import JUDGE_SYSTEM_PROMPT
+    from data_pipeline.agents.writer import WRITER_SYSTEM_PROMPT
+
+    assert "wanting to disappear" in JUDGE_SYSTEM_PROMPT and "most harmful mistake" in JUDGE_SYSTEM_PROMPT
+    assert "grammarScore reflects the text as written" in JUDGE_SYSTEM_PROMPT
+    assert "stays ordinary" in WRITER_SYSTEM_PROMPT and "a clock time" in WRITER_SYSTEM_PROMPT

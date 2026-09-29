@@ -14,7 +14,7 @@ from data_pipeline.endpoints import Endpoint  # noqa: E402
 def good_analysis() -> dict:
     """An analysis that validates against the contract and passes the business rules."""
     return {
-        "moodScore": 6, "sentiment": "Tired", "grammarScore": 8, "grammarFixes": [], "openLoops": ["finish the report"],
+        "moodScore": 6, "sentiment": "Tired", "grammarScore": 9, "grammarFixes": [], "openLoops": ["finish the report"],
         "cognitiveReframes": [{"negativeThought": "I never finish anything", "reframe": "I finished two of three things today."}],
         "topics": [{"topic": "work", "weight": 0.7}, {"topic": "health", "weight": 0.3}],
         "selfFocusScore": 6, "selfFocusFeedback": "Mostly about your own day.", "repetitiveWords": ["really"],

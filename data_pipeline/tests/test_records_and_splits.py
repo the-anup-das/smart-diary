@@ -65,6 +65,7 @@ def test_splits_can_keep_one_teachers_labels(tmp_path):
 
     import pytest
 
+    from data_pipeline.contracts import PROMPT_VERSION
     from data_pipeline.scripts.build_splits import build
     from conftest import good_analysis
 
@@ -73,15 +74,19 @@ def test_splits_can_keep_one_teachers_labels(tmp_path):
         for i in range(10):
             teacher = "teacher-a" if i % 2 == 0 else "teacher-b"
             entry = f"Sample {i}: " + " ".join(f"word{i}{j}" for j in range(40))
+            version = PROMPT_VERSION if i < 8 else "2026.09-v2"     # the last two were labelled under an older prompt
             f.write(json.dumps({"id": f"r{i}", "entry": entry, "analysis": good_analysis(),
-                                "meta": {"teacher_model": teacher, "edge_case": None, "custom_persona": None}}) + "\n")
+                                "meta": {"teacher_model": teacher, "edge_case": None, "custom_persona": None, "prompt_version": version}}) + "\n")
 
-    both = build(raw, tmp_path, test_ratio=0.2, seed=1)
+    current = build(raw, tmp_path, test_ratio=0.2, seed=1)
+    assert current["kept"] == 8 and current["prompt_version_filter"] == PROMPT_VERSION     # older labels are left out by default
+    assert current["prompt_versions_in_file"] == sorted({PROMPT_VERSION, "2026.09-v2"})
+    both = build(raw, tmp_path, test_ratio=0.2, seed=1, prompt_version=None)
     assert both["kept"] == 10 and both["teacher_filter"] is None and both["teachers_in_file"] == ["teacher-a", "teacher-b"]
 
-    one = build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-a")
+    one = build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-a", prompt_version=None)
     assert one["kept"] == 5 and one["teacher_filter"] == "teacher-a"
     assert one["teacher_models"] == ["teacher-a"]                    # the manifest records what the student was trained on
     assert one["train"]["rows"] + one["test"]["rows"] == 5
     with pytest.raises(SystemExit, match="teacher-a, teacher-b"):
-        build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-c")
+        build(raw, tmp_path, test_ratio=0.2, seed=1, teacher="teacher-c", prompt_version=None)

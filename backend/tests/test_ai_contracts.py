@@ -7,12 +7,12 @@ from ai_contracts import analysis as c
 
 # Pinned on purpose. If this fails you changed the prompt or the schema: bump PROMPT_VERSION,
 # update the hash here, and expect the analysis cache to refill.
-PINNED_PROMPT_SHA256 = "a4ea90971aa55cac5eea180cbfd345f0503bf9b3b1ea8f26616ea673a4488230"
+PINNED_PROMPT_SHA256 = "ef42dbf02eb760f0f58fa255129904e39c65868a00874d559486de58d12043b5"
 
 
 def _good_report() -> c.FeedbackReportSchema:
     return c.FeedbackReportSchema(
-        moodScore=6, sentiment="Tired", grammarScore=8, grammarFixes=[], openLoops=["finish the report"],
+        moodScore=6, sentiment="Tired", grammarScore=9, grammarFixes=[], openLoops=["finish the report"],
         cognitiveReframes=[], topics=[c.TopicWeight(topic="work", weight=0.7), c.TopicWeight(topic="health", weight=0.3)],
         selfFocusScore=6, selfFocusFeedback="Mostly about your own day.", repetitiveWords=["really"],
         repetitiveWordingFeedback="Vary the intensifiers.", detectedDecision=None, emotionLabels=["drained"],
@@ -29,7 +29,7 @@ def _good_report() -> c.FeedbackReportSchema:
 
 def test_prompt_hash_is_pinned():
     assert c.PROMPT_SHA256 == PINNED_PROMPT_SHA256
-    assert c.PROMPT_VERSION == "2026.09-v2"
+    assert c.PROMPT_VERSION == "2026.09-v3"
 
 
 def test_prompt_carries_every_enum_value_and_the_topic_vocabulary():
@@ -85,3 +85,27 @@ def test_pipeline_shim_exports_the_same_objects():
     assert contracts.FeedbackReportSchema is c.FeedbackReportSchema
     assert feedback_schema.FeedbackReportSchema is c.FeedbackReportSchema
     assert contracts.build_analysis_system_prompt() == c.build_analysis_system_prompt()
+
+
+def test_distress_rule_names_the_passive_signals():
+    """v3: the prompt every model sees gives the passive examples, not only the strict half of the rule."""
+    prompt = c.build_analysis_system_prompt()
+    for signal in ("wanting to disappear", "not wanting to wake up", "better off without you", "not seeing how to keep going"):
+        assert signal in prompt
+    assert "this job is killing me" in prompt and "When unsure" in prompt
+
+
+def test_generic_sentiment_and_unlisted_grammar_errors_are_rule_breaks():
+    import json
+
+    base = _good_report().model_dump()
+    base["sentiment"] = "Negative"
+    problems = c.check_business_rules(c.FeedbackReportSchema.model_validate(base))
+    assert any("too generic" in p for p in problems)
+    base["sentiment"] = "Wistful"
+    base["grammarScore"], base["grammarFixes"] = 8, []
+    problems = c.check_business_rules(c.FeedbackReportSchema.model_validate(base))
+    assert any("grammarFixes is empty" in p for p in problems)
+    base["grammarScore"] = 9
+    assert c.check_business_rules(c.FeedbackReportSchema.model_validate(base)) == []
+    assert "scores 7 or lower" in c.build_analysis_system_prompt()

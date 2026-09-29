@@ -126,9 +126,17 @@ def write_jsonl(path: Path, rows: list[dict]) -> str:
     return digest.hexdigest()
 
 
-def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_threshold: float = 0.8, teacher: str | None = None) -> dict:
+def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_threshold: float = 0.8, teacher: str | None = None,
+          prompt_version: str | None = PROMPT_VERSION) -> dict:
     records = load_raw(raw_path)
     all_teachers = sorted({(r.get("meta") or {}).get("teacher_model") or "?" for r in records})
+    all_versions = sorted({(r.get("meta") or {}).get("prompt_version") or "?" for r in records})
+    if prompt_version:
+        # Labels made under an older prompt follow older rules; the training records carry today's prompt.
+        records = [r for r in records if (r.get("meta") or {}).get("prompt_version") == prompt_version]
+        if not records:
+            raise SystemExit(f"no rows labelled under prompt {prompt_version!r}; the file holds: {', '.join(all_versions)}. "
+                             "Generate new samples, or pass --prompt-version any to use older labels.")
     if teacher:
         # One dataset, one label style: a student trained on two teachers learns the average of two
         # different ways of labelling the same entry.
@@ -151,6 +159,7 @@ def build(raw_path: Path, out_dir: Path, *, test_ratio: float, seed: int, near_t
         "seed": seed, "test_ratio": test_ratio, "near_duplicate_threshold": near_threshold,
         "raw_records": len(records), "dedup": dedup_stats, "kept": len(kept),
         "teacher_filter": teacher, "teachers_in_file": all_teachers,
+        "prompt_version_filter": prompt_version, "prompt_versions_in_file": all_versions,
         "train": {"path": train_path.name, "rows": len(train), "sha256": train_sha},
         "test": {"path": test_path.name, "rows": len(test), "sha256": test_sha},
         "strata": dict(sorted(strata.items())),
@@ -169,10 +178,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=config.SEED)
     parser.add_argument("--near-threshold", type=float, default=0.8)
     parser.add_argument("--teacher", default=None, help="keep only rows labelled by this teacher model, so one dataset carries one label style")
+    parser.add_argument("--prompt-version", default=PROMPT_VERSION, help=f"keep only rows labelled under this prompt version (default {PROMPT_VERSION}); 'any' keeps all")
     args = parser.parse_args()
     if not args.input.exists():
         raise SystemExit(f"{args.input} does not exist; run the pipeline first")
-    manifest = build(args.input, args.out_dir, test_ratio=args.test_ratio, seed=args.seed, near_threshold=args.near_threshold, teacher=args.teacher)
+    manifest = build(args.input, args.out_dir, test_ratio=args.test_ratio, seed=args.seed, near_threshold=args.near_threshold, teacher=args.teacher,
+                     prompt_version=None if args.prompt_version == "any" else args.prompt_version)
     print(json.dumps(manifest, indent=1))
 
 
