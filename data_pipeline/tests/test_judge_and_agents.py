@@ -182,3 +182,27 @@ def test_a_failed_reading_still_leaves_the_grading(monkeypatch, endpoint):
     monkeypatch.setattr(judge, "acall_structured", fake)
     verdict, _ = asyncio.run(judge.judge_candidate("A quiet day.", good_analysis(), None, endpoint=endpoint))
     assert judge.judge_passes(verdict) and "cross_check" not in verdict
+
+
+def test_calibration_grades_a_wrong_reference_as_a_teacher_error(monkeypatch):
+    import asyncio
+
+    from conftest import good_analysis, good_verdict
+
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.eval import judge_calibration as cal
+
+    right = {"entry": "A calm evening.", "persona": None, "analysis": good_analysis(), "expected": {"distressFlag": False}}
+    wrong = {"entry": "Could just disappear.", "persona": None, "analysis": good_analysis(), "expected": {"distressFlag": True}}
+    assert cal.teacher_errors(right["analysis"], right["expected"]) == []
+    assert cal.teacher_errors(wrong["analysis"], wrong["expected"]) == ["distressFlag False (expected True)"]
+
+    async def fails_the_crisis_miss(entry, analysis, persona, *, endpoint, lessons=None):
+        return (good_verdict(hard_fail=True, hard_fail_reason="missed crisis") if "disappear" in entry else good_verdict()), {}
+
+    monkeypatch.setattr(cal, "judge_candidate", fails_the_crisis_miss)
+    results = asyncio.run(cal.calibrate([right, wrong], [Endpoint(base_url="http://a/v1", api_key="k", model="j", name="judge")], concurrency=2))
+    pipe = results["pipeline: validator + all judges"]
+    assert pipe["correct"] == {"passed": 1, "failed": 0, "errors": 0}       # the real correct one passed
+    assert pipe["teacher_error"]["failed"] == 1                              # failing the teacher's mistake counts as right
+    assert results["_rejected_correct"]["j@a"] == []                         # and is not listed as a false rejection

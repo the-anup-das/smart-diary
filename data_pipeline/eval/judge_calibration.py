@@ -35,9 +35,34 @@ from data_pipeline.agents.llm_client import LLMCallError  # noqa: E402
 from data_pipeline.agents.schema_validator import validate_schema  # noqa: E402
 from data_pipeline.endpoints import parse_endpoint_list  # noqa: E402
 from data_pipeline.scripts.evaluate import load_golden  # noqa: E402
+from data_pipeline.eval.metrics import score_one  # noqa: E402
 
 console = Console()
 CACHE_PATH = config.OUTPUT_DIR / "golden_analyses.jsonl"
+
+
+def teacher_errors(analysis: dict, expected: dict) -> list[str]:
+    """Where the teacher's reference contradicts the golden set's hand-written expectations.
+
+    A reference with errors is not a "correct" analysis: a judge that fails it is right. Without this
+    check the calibration counts every judge that catches a teacher mistake as a false rejection."""
+    s = score_one(analysis, expected or {})
+    out: list[str] = []
+    if s.get("distress_correct") is False:
+        out.append(f"distressFlag {analysis.get('distressFlag')} (expected {expected.get('distressFlag')})")
+    if s.get("mood_error"):
+        out.append(f"moodScore {analysis.get('moodScore')} (expected {expected.get('moodScore')})")
+    if s.get("rumination_correct") is False:
+        out.append(f"ruminationLevel {(analysis.get('energyAnalysis') or {}).get('ruminationLevel')} (expected {expected.get('ruminationLevel')})")
+    if s.get("stim_load_error"):
+        out.append(f"stimulation load {(analysis.get('stimulation') or {}).get('load')} (expected {expected.get('stimulationLoad')})")
+    if s.get("rot_load_error"):
+        out.append(f"brainRotLoad {(analysis.get('cognition') or {}).get('brainRotLoad')} (expected {expected.get('brainRotLoad')})")
+    for key, label in (("sleep_correct", "sleepDisrupted"), ("minutes_in_range", "passiveConsumptionMinutes"), ("short_form_correct", "shortFormVideo"),
+                       ("fog_correct", "fogOrAttention"), ("craving_correct", "cravingLanguage")):
+        if s.get(key) is False:
+            out.append(label)
+    return out
 
 
 def corruptions(analysis: dict, entry: str) -> dict[str, dict]:
@@ -114,7 +139,8 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
     # What the validator alone catches: business-rule breaks never reach a judge in a real run.
     cases: dict[tuple[int, str], dict] = {}
     for index, row in enumerate(rows):
-        cases[(index, "correct")] = row["analysis"]
+        errors = teacher_errors(row["analysis"], row.get("expected") or {})
+        cases[(index, "teacher_error" if errors else "correct")] = row["analysis"]
         for name, bad in corruptions(row["analysis"], row["entry"]).items():
             cases[(index, name)] = bad
     validator_ok = {key: validate_schema(analysis)[0] for key, analysis in cases.items()}
@@ -157,7 +183,7 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
 
 
 def print_results(results: dict) -> None:
-    names = ["correct", "flipped_distress", "topic_weights_half", "invented_minutes", "wrong_rumination", "two_micro_actions", "contradictory_mood"]
+    names = ["correct", "teacher_error", "flipped_distress", "topic_weights_half", "invented_minutes", "wrong_rumination", "two_micro_actions", "contradictory_mood"]
     table = Table(title="Judge calibration: pass rate on correct analyses, fail rate on corrupted ones", border_style="bright_blue")
     table.add_column("Judge", style="bold cyan")
     for name in names:
@@ -213,6 +239,13 @@ def main() -> None:
     analyzer = config.role_endpoint("analyzer", config.ANALYZER_MODEL)
     console.print(f"analyzer {analyzer.label}; judges: {', '.join(ep.label for ep in judges)}; {len(rows)} entries x 7 grades each")
     rows = asyncio.run(reference_analyses(rows, analyzer))
+    flawed = [(r["id"], teacher_errors(r["analysis"], r.get("expected") or {})) for r in rows]
+    flawed = [(rid, errs) for rid, errs in flawed if errs]
+    if flawed:
+        console.print(f"[yellow]{len(flawed)} of {len(rows)} teacher references contradict the golden set; they are graded as 'teacher error', "
+                      "where failing them is the right call:[/yellow]")
+        for rid, errs in flawed:
+            console.print(f"  {rid}: {', '.join(errs)}")
     results = asyncio.run(calibrate(rows, judges, args.concurrency))
     print_results(results)
     out = config.OUTPUT_DIR / "judge_calibration.json"
