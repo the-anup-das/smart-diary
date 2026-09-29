@@ -91,7 +91,7 @@ class FeedbackReportSchema(BaseModel):
     repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
     detectedDecision: str | None = Field(default=None, description="If the user is struggling with a specific decision (e.g., 'Should I quit my job?'), summarize the topic here. Otherwise null.")
     emotionLabels: list[str] = Field(description="1-3 precise emotion words the writer is expressing (e.g. 'overwhelmed', 'wistful', 'resentful', 'proud'). Granular words, not generic ones like 'bad' or 'sad' unless truly the best fit.")
-    distressFlag: bool = Field(description="True ONLY when the entry contains clear signals of self-harm, suicidal thoughts, or acute crisis (e.g. hopelessness about being alive, wanting to disappear or end things). Ordinary sadness, stress, anger, or venting must be False.")
+    distressFlag: bool = Field(description="True for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish (wanting to disappear, not wanting to wake up, others better off without you, not seeing how to keep going). Ordinary sadness, stress, anger and figurative venting are False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
     stimulation: StimulationSignalsSchema = Field(description="Reward-seeking and overstimulation signals, only from what the entry explicitly says.")
     cognition: CognitionSignalsSchema = Field(description="Attention, brain fog, passive consumption and brain-building activities, only from what the entry explicitly says.")
@@ -141,8 +141,11 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         "Provide a 1-sentence reframe/tip for each. Give a rumination coaching line. "
         "Generate 3 topic-tailored micro-actions and a 'tomorrowFocus' strategy.\n"
         "4. Emotions: name 1-3 precise emotion words the writer expresses (granularity over generic terms).\n"
-        "5. Safety: set distressFlag true ONLY for clear self-harm/suicidal/acute-crisis signals — "
-        "never for ordinary sadness, stress, or venting.\n"
+        "5. Safety: set distressFlag true for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die "
+        "or vanish: wanting to disappear, not wanting to wake up, feeling others would be better off without you, "
+        "not seeing how to keep going. Keep it false for ordinary sadness, stress, anger and figurative venting "
+        "('this job is killing me', 'I could die of embarrassment'). When unsure whether a line is a passive wish "
+        "to die or venting, set it true.\n"
         "6. Stimulation: record compulsive or high-stimulation behaviours ONLY when the entry mentions them "
         "(scrolling, social media, video, gaming, porn, gambling, food, shopping, substances), with trigger, time of day, "
         "loss of control, the after-state, sleep impact and what was displaced. If nothing is mentioned, return an empty "
