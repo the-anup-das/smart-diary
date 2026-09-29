@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -20,6 +20,12 @@ from data_pipeline.endpoints import Endpoint
 
 
 class JudgeVerdict(BaseModel):
+    # Filled from the entry alone, before the analysis's numbers are looked at. Code compares them with
+    # the labels, because a judge reading the analysis as a whole does not reliably notice a mood of 9
+    # on a despairing entry or "low" rumination on an entry that loops all night.
+    own_mood: int = Field(ge=1, le=10, description="From the entry alone: its mood, 1 (lowest) to 10 (best).")
+    own_rumination: Literal["low", "moderate", "high"] = Field(description="From the entry alone: how much the writer loops on the same worry.")
+    own_distress: bool = Field(description="From the entry alone: self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish?")
     grounding: int = Field(ge=0, le=10, description="Every claim in the analysis is supported by the entry; nothing invented.")
     safety: int = Field(ge=0, le=10, description="distressFlag is correct: true only for acute crisis or self-harm signals, false for ordinary venting.")
     cbt_quality: int = Field(ge=0, le=10, description="Reframes are specific, kind, believable and grounded in CBT; micro-actions are concrete and tied to the drainers.")
@@ -34,6 +40,9 @@ class JudgeVerdict(BaseModel):
 
 JUDGE_SYSTEM_PROMPT = f"""You are the quality gate for a dataset that teaches a small model to analyse private journal entries.
 You receive a journal entry and the analysis a teacher model produced for it. Grade the pair strictly.
+
+Work in two steps. First read ONLY the journal entry and fill own_mood, own_rumination and own_distress
+from it, as if no analysis existed. Then read the analysis and grade it.
 
 Score each dimension 0-10:
 - grounding: every claim in the analysis is supported by the entry. Invented facts, feelings or events score low.
@@ -76,13 +85,49 @@ def fail_closed(reason: str) -> dict:
     }
 
 
+MOOD_GAP_FAIL = 3   # a mood this far from the judge's own reading contradicts the entry
+
+
+def cross_check(verdict: dict, analysis: dict) -> list[str]:
+    """Where the labels disagree with the judge's own reading of the entry. Each item is a hard fail."""
+    problems: list[str] = []
+    mood, own_mood = analysis.get("moodScore"), verdict.get("own_mood")
+    if isinstance(mood, int) and isinstance(own_mood, int) and abs(mood - own_mood) >= MOOD_GAP_FAIL:
+        problems.append(f"moodScore {mood} contradicts the entry, which reads as about {own_mood}")
+    level = (analysis.get("energyAnalysis") or {}).get("ruminationLevel")
+    own_level = verdict.get("own_rumination")
+    if {level, own_level} == {"low", "high"}:
+        problems.append(f"ruminationLevel '{level}' contradicts the entry, which reads as '{own_level}'")
+    flag, own_flag = analysis.get("distressFlag"), verdict.get("own_distress")
+    if isinstance(flag, bool) and isinstance(own_flag, bool) and flag != own_flag:
+        problems.append(
+            "distressFlag is false but the entry shows a crisis or a passive wish to die" if own_flag
+            else "distressFlag is true but the entry shows no crisis signal"
+        )
+    return problems
+
+
+def apply_cross_check(verdict: dict, analysis: dict) -> dict:
+    """Turn a disagreement between the judge's reading and the labels into a hard fail with the reason."""
+    problems = cross_check(verdict, analysis)
+    if not problems:
+        return verdict
+    out = dict(verdict)
+    out["cross_check"] = problems
+    out["hard_fail"] = True
+    out["hard_fail_reason"] = "; ".join(problems)
+    notes = (out.get("label_notes") or "").strip()
+    out["label_notes"] = "; ".join(problems) + (f"; {notes}" if notes else "")
+    return out
+
+
 async def judge_candidate(entry: str, analysis_json: dict, custom_persona: str | None, *, endpoint: Endpoint, lessons: list[str] | None = None) -> tuple[dict, dict]:
     """Returns (verdict, usage). An unparseable verdict is a fail."""
     messages = build_judge_messages(entry, analysis_json, custom_persona, lessons)
     result = await acall_structured(endpoint, messages, JudgeVerdict, temperature=0.0, max_tokens=config.MAX_TOKENS_JUDGE)
     if result.parsed is None:
         return fail_closed(f"judge output unparseable: {result.error}"), result.usage
-    return result.parsed.model_dump(), result.usage
+    return apply_cross_check(result.parsed.model_dump(), analysis_json), result.usage
 
 
 def judge_passes(verdict: dict, threshold_bump: int = 0) -> bool:

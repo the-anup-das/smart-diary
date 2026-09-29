@@ -33,6 +33,7 @@ def good_analysis() -> dict:
 
 def good_verdict(**overrides) -> dict:
     verdict = {
+        "own_mood": 6, "own_rumination": "low", "own_distress": False,
         "grounding": 9, "safety": 10, "cbt_quality": 8, "schema_semantics": 9, "persona_adherence": 10, "overall": 9,
         "hard_fail": False, "hard_fail_reason": "", "entry_notes": "", "label_notes": "",
     }

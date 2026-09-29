@@ -92,3 +92,53 @@ def test_judge_and_writer_prompts_carry_the_label_fixes():
     assert "wanting to disappear" in JUDGE_SYSTEM_PROMPT and "most harmful mistake" in JUDGE_SYSTEM_PROMPT
     assert "grammarScore reflects the text as written" in JUDGE_SYSTEM_PROMPT
     assert "stays ordinary" in WRITER_SYSTEM_PROMPT and "a clock time" in WRITER_SYSTEM_PROMPT
+
+
+def test_the_judges_own_reading_catches_contradictions_it_would_otherwise_pass():
+    """Calibration: both judges passed every mood of 9 on a despairing entry and every flipped rumination level."""
+    from conftest import good_analysis, good_verdict
+
+    from data_pipeline.agents.judge import apply_cross_check, cross_check, judge_passes
+
+    analysis = good_analysis()                                   # mood 6, rumination low, distress false
+    assert cross_check(good_verdict(), analysis) == []           # the judge reads the entry the same way
+    assert judge_passes(apply_cross_check(good_verdict(), analysis))
+
+    mood9 = dict(analysis, moodScore=9)
+    assert cross_check(good_verdict(own_mood=6), mood9) == ["moodScore 9 contradicts the entry, which reads as about 6"]
+    assert cross_check(good_verdict(own_mood=7), mood9) == []    # two points apart is a matter of opinion
+
+    looping = good_verdict(own_rumination="high")
+    assert cross_check(looping, analysis)[0].startswith("ruminationLevel 'low' contradicts")
+    assert cross_check(good_verdict(own_rumination="moderate"), analysis) == []   # neighbours are not a contradiction
+
+    crisis = good_verdict(own_distress=True)
+    failed = apply_cross_check(crisis, analysis)
+    assert failed["hard_fail"] and not judge_passes(failed) and "passive wish to die" in failed["hard_fail_reason"]
+    assert failed["label_notes"].startswith("distressFlag is false")   # the analyzer gets told what to repair
+    assert cross_check(good_verdict(own_distress=False), dict(analysis, distressFlag=True)) == ["distressFlag is true but the entry shows no crisis signal"]
+
+
+def test_calibration_reports_the_pipeline_as_a_whole(monkeypatch):
+    import asyncio
+
+    from conftest import good_analysis, good_verdict
+
+    from data_pipeline.endpoints import Endpoint
+    from data_pipeline.eval import judge_calibration as cal
+
+    rows = [{"entry": "A long day at work, then a quiet evening.", "persona": None, "analysis": good_analysis()}]
+    strict = Endpoint(base_url="http://a/v1", api_key="k", model="strict", name="judge")
+    lenient = Endpoint(base_url="http://b/v1", api_key="k", model="lenient", name="judge")
+
+    async def fake_judge(entry, analysis, persona, *, endpoint, lessons=None):
+        caught = endpoint.model == "strict" and analysis.get("distressFlag") is True     # only the strict judge notices the flip
+        return (good_verdict(hard_fail=True, hard_fail_reason="flag") if caught else good_verdict()), {}
+
+    monkeypatch.setattr(cal, "judge_candidate", fake_judge)
+    results = asyncio.run(cal.calibrate(rows, [strict, lenient], concurrency=2))
+    pipe = results["pipeline: validator + all judges"]
+    assert pipe["correct"] == {"passed": 1, "failed": 0, "errors": 0}
+    assert pipe["flipped_distress"]["failed"] == 1                  # one judge caught it, so the pipeline did
+    assert pipe["topic_weights_half"]["failed"] == 1 and pipe["two_micro_actions"]["failed"] == 1   # the validator's, not the judges'
+    assert results[lenient.label]["topic_weights_half"]["passed"] == 1                              # a judge alone missed it

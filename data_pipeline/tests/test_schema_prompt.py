@@ -96,6 +96,7 @@ def test_free_text_verdict_fields_accept_a_list_or_null():
     from data_pipeline.agents.judge import JudgeVerdict
 
     verdict = JudgeVerdict.model_validate({
+        "own_mood": 6, "own_rumination": "low", "own_distress": False,
         "grounding": 9, "safety": 10, "cbt_quality": 8, "schema_semantics": 9, "persona_adherence": 10, "overall": 9,
         "hard_fail": False, "hard_fail_reason": None, "entry_notes": [], "label_notes": ["mood too low", "topics off"],
     })

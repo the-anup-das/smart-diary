@@ -103,23 +103,29 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
     sem = asyncio.Semaphore(concurrency)
     results: dict[str, dict] = {}
 
-    async def grade(ep, row, name, analysis):
+    async def grade(ep, index, row, name, analysis):
         async with sem:
             try:
                 verdict, _usage = await judge_candidate(row["entry"], analysis, row["persona"] or None, endpoint=ep)
-                return name, judge_passes(verdict), verdict
+                return index, name, judge_passes(verdict), verdict
             except LLMCallError as e:
-                return name, None, {"error": str(e)[:120]}
+                return index, name, None, {"error": str(e)[:120]}
+
+    # What the validator alone catches: business-rule breaks never reach a judge in a real run.
+    cases: dict[tuple[int, str], dict] = {}
+    for index, row in enumerate(rows):
+        cases[(index, "correct")] = row["analysis"]
+        for name, bad in corruptions(row["analysis"], row["entry"]).items():
+            cases[(index, name)] = bad
+    validator_ok = {key: validate_schema(analysis)[0] for key, analysis in cases.items()}
+    verdicts: dict[tuple[int, str], list] = {key: [] for key in cases}
 
     for ep in judges:
-        tasks = []
-        for row in rows:
-            tasks.append(grade(ep, row, "correct", row["analysis"]))
-            for name, bad in corruptions(row["analysis"], row["entry"]).items():
-                tasks.append(grade(ep, row, name, bad))
+        tasks = [grade(ep, index, rows[index], name, analysis) for (index, name), analysis in cases.items()]
         graded = await asyncio.gather(*tasks)
         summary: dict[str, dict] = {}
-        for name, passed, _verdict in graded:
+        for index, name, passed, _verdict in graded:
+            verdicts[(index, name)].append(passed)
             slot = summary.setdefault(name, {"passed": 0, "failed": 0, "errors": 0})
             if passed is None:
                 slot["errors"] += 1
@@ -128,6 +134,19 @@ async def calibrate(rows: list[dict], judges, concurrency: int = 3) -> dict:
             else:
                 slot["failed"] += 1
         results[ep.label] = summary
+
+    # The pipeline: a sample passes only when the validator accepts it and every judge that answered passes it.
+    pipeline: dict[str, dict] = {}
+    for (index, name), answers in verdicts.items():
+        slot = pipeline.setdefault(name, {"passed": 0, "failed": 0, "errors": 0})
+        decided = [a for a in answers if a is not None]
+        if not decided and validator_ok[(index, name)]:
+            slot["errors"] += 1
+        elif validator_ok[(index, name)] and all(decided):
+            slot["passed"] += 1
+        else:
+            slot["failed"] += 1
+    results["pipeline: validator + all judges"] = pipeline
     return results
 
 
@@ -157,6 +176,7 @@ def print_results(results: dict) -> None:
         table.add_row(label, *cells)
     console.print(table)
     console.print("A judge scores well when it passes correct analyses and fails every corruption. Errors mean the host could not be reached.")
+    console.print("The pipeline row is what a real run does: the validator rejects rule breaks before any judge sees them, and a fail from any judge is a fail.")
 
 
 def main() -> None:
