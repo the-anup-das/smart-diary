@@ -229,6 +229,89 @@ def json_schema_format(schema: type[BaseModel]) -> dict:
     return {"type": "json_schema", "json_schema": {"name": schema.__name__, "schema": body}}
 
 
+# Hosts whose replies show response_format was accepted but not enforced (prose around the JSON,
+# missing required fields, wrong types). Their calls carry the schema in the prompt instead.
+_schema_ignored: set[str] = set()
+_STRUCTURAL_ERRORS = ("Field required", "Input should be a valid", "Extra inputs are not permitted")
+
+
+def _inline_refs(node, defs: dict):
+    """Replace every $ref with the definition it points at, so a model reads one self-contained schema."""
+    if isinstance(node, dict):
+        if "$ref" in node:
+            # pydantic puts the field's description next to the reference; keep it on the inlined object
+            target = dict(defs.get(node["$ref"].split("/")[-1], {}))
+            target.update({k: v for k, v in node.items() if k != "$ref"})
+            return _inline_refs(target, defs)
+        return {k: _inline_refs(v, defs) for k, v in node.items() if k not in ("$defs", "title")}
+    if isinstance(node, list):
+        return [_inline_refs(v, defs) for v in node]
+    return node
+
+
+def schema_instruction(schema: type[BaseModel]) -> str:
+    """The schema as text, descriptions kept: for a model the server will not constrain, they are the guidance."""
+    body = schema.model_json_schema()
+    body = _inline_refs(body, body.get("$defs", {}))
+    return (
+        "Reply with one JSON object and nothing else: no prose before or after it and no code fences. "
+        "It must match this JSON Schema exactly: every required field present, every value of the type shown, "
+        "and every array of objects filled with objects that have the listed keys, never plain strings.\n"
+        + json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def with_schema(messages: list[dict], schema: type[BaseModel]) -> list[dict]:
+    """A copy of the messages with the schema appended to the system message (or added as one)."""
+    out = [dict(m) for m in messages]
+    text = schema_instruction(schema)
+    if out and out[0].get("role") == "system":
+        out[0]["content"] = f"{out[0]['content']}\n\n{text}"
+    else:
+        out.insert(0, {"role": "system", "content": text})
+    return out
+
+
+def _looks_unenforced(raw: str, error: str | None) -> bool:
+    """A constrained decoder only emits the object itself and cannot leave out a required field."""
+    if error is None:
+        return False
+    stripped = (raw or "").strip()
+    return not (stripped.startswith("{") and stripped.endswith("}")) or any(s in error for s in _STRUCTURAL_ERRORS)
+
+
+def _add_usage(a: dict, b: dict) -> dict:
+    out = dict(a)
+    for k in ("tokens", "prompt_tokens", "completion_tokens", "cost"):
+        out[k] = (a.get(k) or 0) + (b.get(k) or 0)
+    return out
+
+
+def _validate(raw: str, schema: type[BaseModel]) -> tuple[dict | None, BaseModel | None, str | None]:
+    data = extract_json_object(raw)
+    if data is None:
+        return None, None, "the reply contained no JSON object"
+    try:
+        return data, schema.model_validate(data), None
+    except ValidationError as ve:
+        return data, None, "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in ve.errors()[:5])
+
+
+# ---------------------------------------------------------------- lenient text fields
+
+def as_text(value):
+    """Free-text fields from models that answer with a list, an object or null instead of a string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v).strip() for v in value if v is not None and str(v).strip())
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def _strip_descriptions(node) -> None:
     if isinstance(node, dict):
         node.pop("description", None)
@@ -277,38 +360,54 @@ async def acall_structured(
     max_tokens: int | None = None,
     max_retries: int = 3,
 ) -> StructuredResult:
-    """Ask for `schema` and validate the reply. Never raises on bad content, only on transport failure."""
-    mode = "json_schema" if _json_schema_support.get(ep.base_url, True) else "json_object"
-    raw, usage = "", _zero_usage(ep)
-    for _ in range(3):
-        if mode == "json_schema":
-            rf = json_schema_format(schema)
-        elif mode == "json_object":
-            rf = {"type": "json_object"}
-        else:
-            rf = None
-        try:
-            raw, usage = await acall_llm(ep, messages, temperature=temperature, max_tokens=max_tokens, response_format=rf, max_retries=max_retries)
-            break
-        except LLMCallError as e:
-            if mode != "text" and _is_response_format_rejection(e):
-                if mode == "json_schema":
-                    _json_schema_support[ep.base_url] = False
-                    mode = "json_object"
-                else:
-                    mode = "text"
-                continue
-            raise
+    """Ask for `schema` and validate the reply. Never raises on bad content, only on transport failure.
 
-    data = extract_json_object(raw)
-    if data is None:
-        return StructuredResult(None, None, "the reply contained no JSON object", raw, usage, mode, messages)
-    try:
-        parsed = schema.model_validate(data)
-        return StructuredResult(data, parsed, None, raw, usage, mode, messages)
-    except ValidationError as ve:
-        error = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in ve.errors()[:5])
-        return StructuredResult(data, None, error, raw, usage, mode, messages)
+    The schema travels in response_format. A host that accepts that field but does not enforce it
+    (the reply has prose around the JSON, a missing required field or a wrong type) is remembered,
+    the same request is sent once more with the schema written into the prompt, and every later
+    call to that host carries the schema in the prompt from the start.
+    """
+    key = f"{ep.base_url}|{ep.model}"
+    mode = "json_schema" if _json_schema_support.get(ep.base_url, True) else "json_object"
+
+    async def attempt(schema_in_prompt: bool) -> tuple[str, dict, list[dict]]:
+        nonlocal mode
+        for _ in range(3):
+            send = with_schema(messages, schema) if (schema_in_prompt or mode != "json_schema") else messages
+            if mode == "json_schema":
+                rf = json_schema_format(schema)
+            elif mode == "json_object":
+                rf = {"type": "json_object"}
+            else:
+                rf = None
+            try:
+                raw, usage = await acall_llm(ep, send, temperature=temperature, max_tokens=max_tokens, response_format=rf, max_retries=max_retries)
+                return raw, usage, send
+            except LLMCallError as e:
+                if mode != "text" and _is_response_format_rejection(e):
+                    if mode == "json_schema":
+                        _json_schema_support[ep.base_url] = False
+                        mode = "json_object"
+                    else:
+                        mode = "text"
+                    continue
+                raise
+        return "", _zero_usage(ep), messages
+
+    known = key in _schema_ignored
+    raw, usage, sent = await attempt(known)
+    data, parsed, error = _validate(raw, schema)
+    if error and not known and mode == "json_schema" and _looks_unenforced(raw, error):
+        _schema_ignored.add(key)
+        TRACKER.note(f"{ep.host} ignores the JSON schema for {ep.model}; sending it in the prompt from now on")
+        try:
+            raw2, usage2, sent2 = await attempt(True)
+        except LLMCallError:
+            return StructuredResult(data, parsed, error, raw, usage, mode, sent)
+        usage = _add_usage(usage, usage2)
+        raw, sent = raw2, sent2
+        data, parsed, error = _validate(raw, schema)
+    return StructuredResult(data, parsed, error, raw, usage, mode, sent)
 
 
 def reset_caches() -> None:
@@ -317,5 +416,6 @@ def reset_caches() -> None:
     _json_schema_support.clear()
     _extras_rejected.clear()
     _create_params.clear()
+    _schema_ignored.clear()
     reset_host_limiters()
     METRICS.reset()

@@ -1,16 +1,18 @@
 """Reviewer: judges the entry text before any labelling. Fails closed on an unreadable reply."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, Field
 
 from data_pipeline import config
-from data_pipeline.agents.llm_client import acall_structured
+from data_pipeline.agents.llm_client import acall_structured, as_text
 from data_pipeline.endpoints import Endpoint
 
 
 class ReviewVerdict(BaseModel):
     approved: bool
-    critique: str = Field(description="One or two sentences: why it was approved, or exactly what the editor must fix.")
+    critique: Annotated[str, BeforeValidator(as_text)] = Field(description="One or two sentences: why it was approved, or exactly what the editor must fix.")
 
 
 REVIEWER_SYSTEM_PROMPT = """You are an experienced editor and a researcher of how people actually write in private journals.

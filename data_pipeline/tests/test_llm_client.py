@@ -100,10 +100,13 @@ def test_structured_downgrades_from_json_schema_to_json_object_and_remembers(mon
 
 
 def test_structured_repairs_and_reports_validation_errors(monkeypatch, endpoint):
-    _install(monkeypatch, FakeClient([_response('{"decision": "PASS", "score": "nine",}')]))
+    bad = '{"decision": "PASS", "score": "nine",}'
+    fake = _install(monkeypatch, FakeClient([_response(bad), _response(bad)]))   # a wrong type reads as an unenforced schema: one retry
     result = asyncio.run(llm_client.acall_structured(endpoint, [{"role": "user", "content": "x"}], Verdict))
     assert result.data == {"decision": "PASS", "score": "nine"} and result.parsed is None and "score" in result.error
-    _install(monkeypatch, FakeClient([_response("I cannot help with that.")]))
+    assert len(fake.calls) == 2
+    llm_client.reset_caches()
+    _install(monkeypatch, FakeClient([_response("I cannot help with that."), _response("I cannot help with that.")]))
     empty = asyncio.run(llm_client.acall_structured(endpoint, [{"role": "user", "content": "x"}], Verdict))
     assert empty.data is None and "no JSON object" in empty.error
 

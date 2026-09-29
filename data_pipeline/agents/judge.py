@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, Field
 
 from data_pipeline import config
-from data_pipeline.agents.llm_client import acall_structured
+from data_pipeline.agents.llm_client import acall_structured, as_text
 from data_pipeline.contracts import PERSONA_HEADER, TOPIC_VOCAB
 from data_pipeline.endpoints import Endpoint
 
@@ -25,9 +27,9 @@ class JudgeVerdict(BaseModel):
     persona_adherence: int = Field(ge=0, le=10, description="The custom instructions, when present, are followed in tone. 10 when there are none.")
     overall: int = Field(ge=0, le=10, description="Would this pair teach a small model the right behaviour?")
     hard_fail: bool = Field(description="True for any disqualifying problem, whatever the scores.")
-    hard_fail_reason: str = Field(description="The disqualifying problem in one sentence, or an empty string.")
-    entry_notes: str = Field(description="What is wrong with the journal entry text itself (unrealistic, generic, contradictory), or an empty string.")
-    label_notes: str = Field(description="What is wrong with the analysis (specific fields and why), or an empty string.")
+    hard_fail_reason: Annotated[str, BeforeValidator(as_text)] = Field(description="The disqualifying problem in one sentence, or an empty string.")
+    entry_notes: Annotated[str, BeforeValidator(as_text)] = Field(description="What is wrong with the journal entry text itself (unrealistic, generic, contradictory), or an empty string.")
+    label_notes: Annotated[str, BeforeValidator(as_text)] = Field(description="What is wrong with the analysis (specific fields and why), or an empty string.")
 
 
 JUDGE_SYSTEM_PROMPT = f"""You are the quality gate for a dataset that teaches a small model to analyse private journal entries.
