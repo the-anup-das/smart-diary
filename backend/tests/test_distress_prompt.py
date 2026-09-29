@@ -15,7 +15,8 @@ def test_distress_rule_names_the_passive_signals():
     source = _prompt_source()
     for signal in ("wanting to disappear", "not wanting to wake up", "better off without you", "not seeing how to keep going"):
         assert signal in source
-    assert "this job is killing me" in source and "When unsure" in source
+    assert "this job is killing me" in source and "crawl" in source and "could be literal" in source
+    assert "When unsure" not in source          # an unqualified "when unsure, set it true" flagged idioms as crises
     assert "ONLY for clear self-harm" not in source
 
 
