@@ -74,3 +74,12 @@ def test_writer_prompt_never_sees_the_persona_but_sees_lessons_and_edge_case():
     user = messages[1]["content"]
     assert "rumination_high" in user and "too tidy an ending" in user and "be blunt" not in user
     assert "between 40 and 80 words" in user
+
+
+def test_judge_prompt_says_zero_means_not_mentioned():
+    """The rule that caused 729 of 756 judge rejections: every field is required, so a zero is never 'invented'."""
+    from data_pipeline.agents.judge import JUDGE_SYSTEM_PROMPT
+
+    assert "never a fault" in JUDGE_SYSTEM_PROMPT and "Only a positive claim can be invented" in JUDGE_SYSTEM_PROMPT
+    assert "a stimulation or cognition value is not stated in the entry" not in JUDGE_SYSTEM_PROMPT
+    assert "is not left out" in JUDGE_SYSTEM_PROMPT            # the other direction: a described habit labelled 0 is a label fault

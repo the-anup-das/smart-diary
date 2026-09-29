@@ -72,3 +72,19 @@ def test_a_batch_can_be_aimed_at_chosen_edge_cases():
         generate_diversity_profile(rng, force_edge_case=True, edge_case_types=["not_a_case"])
     for needed in ("compulsive_stimulation", "brain_fog_and_passive_consumption", "calm_low_rumination", "no_signals_control"):
         assert needed in EDGE_CASE_TYPES           # the coverage the dataset is missing has a name to ask for
+
+
+def test_machine_errors_never_become_lessons(tmp_path):
+    from data_pipeline.lessons import is_machine_error
+
+    store = LessonsStore(tmp_path / "lessons.json")
+
+    async def fill():
+        await store.add("entry", "reviewer output unreadable (critique: Input should be a valid string); tighten the entry's concrete detail")
+        await store.add("labels", "cognitiveReframes.0: Input should be a valid dictionary or instance of CognitiveReframe")
+        await store.add("labels", "selfFocusScore: Field required")
+        await store.add("labels", "Mood 8 contradicts an entry about a sleepless, anxious night.")
+
+    asyncio.run(fill())
+    assert store.counts()["entry"] == 0 and store.top("labels") == ["Mood 8 contradicts an entry about a sleepless, anxious night."]
+    assert is_machine_error("Judge output unreadable: the reply contained no JSON object") and not is_machine_error("Too tidy an ending.")

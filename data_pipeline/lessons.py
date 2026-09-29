@@ -21,6 +21,19 @@ BUCKETS = ("entry", "reviewer", "labels", "judge")
 _MAX_TEXT = 220
 
 
+# Messages the pipeline writes itself when a model's reply could not be read. They say nothing about
+# the entry or the labels, and as "lessons" they crowd out real ones in every later prompt.
+_MACHINE_ERRORS = (
+    "reviewer output unreadable", "judge output unreadable", "the reply contained no json",
+    "all judge endpoints are unavailable", "input should be a valid", "field required",
+)
+
+
+def is_machine_error(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _MACHINE_ERRORS)
+
+
 def normalise(text: str) -> str:
     text = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())
     return re.sub(r"\s+", " ", text).strip()[:160]
@@ -46,7 +59,7 @@ class LessonsStore:
             return
         text = (text or "").strip()
         key = normalise(text)
-        if len(key) < 12:
+        if len(key) < 12 or is_machine_error(text):
             return
         async with self._lock:
             slot = self._data[bucket].get(key)

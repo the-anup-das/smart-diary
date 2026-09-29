@@ -184,7 +184,7 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         repair = " after the judge's complaint" if state.get("entry_repair_count") else ""
         TRACKER.stage("reviewer", f"round {state.get('editor_iteration', 0) + 1}{repair} on {ep.host}")
         review, usage = await review_journal_entry(state["entry"], state["profile"], endpoint=ep, lessons=runtime.lessons.top("reviewer"))
-        if not review.get("approved"):
+        if not review.get("approved") and not review.get("unreadable"):
             await runtime.lessons.add("entry", review.get("critique", ""))
         return {"review": review, **_acc(state, usage)}
 
@@ -243,11 +243,12 @@ def build_pipeline_graph(runtime: PipelineRuntime):
         reason = judge_reason(verdict)
         entry_notes = (verdict.get("entry_notes") or "").strip()
         label_notes = (verdict.get("label_notes") or "").strip()
-        if label_notes or not entry_notes:
-            await runtime.lessons.add("labels", label_notes or reason)
-        if entry_notes:
-            await runtime.lessons.add("entry", entry_notes)
-            await runtime.lessons.add("reviewer", entry_notes)
+        if not verdict.get("unparseable"):          # an unreadable verdict teaches nothing
+            if label_notes or not entry_notes:
+                await runtime.lessons.add("labels", label_notes or reason)
+            if entry_notes:
+                await runtime.lessons.add("entry", entry_notes)
+                await runtime.lessons.add("reviewer", entry_notes)
 
         if entry_notes and state.get("entry_repair_count", 0) < config.MAX_ENTRY_REPAIR and not verdict.get("unparseable"):
             # The text is at fault: back to the writer through the editor and the reviewer, then a fresh analysis.

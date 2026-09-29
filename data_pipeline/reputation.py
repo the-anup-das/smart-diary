@@ -53,9 +53,15 @@ class JudgeReputation:
     def score(self, label: str) -> int:
         return int(self._data.get(label, {}).get("score", 0))
 
+    def leniency(self, label: str) -> int:
+        """Agreements minus the cost of passes that were overturned. Overturned fails do not count:
+        a judge corrected for being too strict must not be made stricter still."""
+        slot = self._data.get(label, {})
+        return int(slot.get("agreed", 0)) * self.agree + int(slot.get("overturned_pass", 0)) * self.overturned_pass
+
     def threshold_bump(self, label: str) -> int:
-        """Extra overall points a slipping judge must award before a sample passes."""
-        score = self.score(label)
+        """Extra overall points a judge must award before a sample passes, only when it has been passing what others fail."""
+        score = self.leniency(label)
         if score >= self.strict_below:
             return 0
         return min(2, 1 + (self.strict_below - score) // 5)

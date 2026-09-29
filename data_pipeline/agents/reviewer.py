@@ -42,5 +42,5 @@ async def review_journal_entry(entry: str, profile: dict, *, endpoint: Endpoint,
     messages = build_reviewer_messages(entry, profile, lessons)
     result = await acall_structured(endpoint, messages, ReviewVerdict, temperature=0.2, max_tokens=config.MAX_TOKENS_REVIEW)
     if result.parsed is None:
-        return {"approved": False, "critique": f"reviewer output unreadable ({result.error}); tighten the entry's concrete detail"}, result.usage
+        return {"approved": False, "unreadable": True, "critique": f"reviewer output unreadable ({result.error}); tighten the entry's concrete detail"}, result.usage
     return result.parsed.model_dump(), result.usage
