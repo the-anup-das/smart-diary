@@ -48,8 +48,8 @@ class EnergyAnalysisSchema(BaseModel):
     drainers: list[str] = Field(description="Things that drained the user's energy in this entry (e.g., poor diet, arguments, stress).")
     controllables: list[EnergyItem] = Field(description="Factors in the entry that are within the user's control.")
     uncontrollables: list[EnergyItem] = Field(description="Factors in the entry that are outside the user's control.")
-    ruminationLevel: str = Field(description="'low', 'moderate', or 'high'")
-    ruminationCoaching: str = Field(description="One gentle coaching line about their overthinking.")
+    ruminationLevel: str = Field(description="'low', 'moderate' or 'high', from how the entry itself thinks, not its topic: 'high' when it circles the same worry or scene, 'moderate' when a worry recurs but the entry moves on, 'low' when it reflects, plans, looks back on a hard time that has eased, or is grateful.")
+    ruminationCoaching: str = Field(description="One gentle coaching line about overthinking; when rumination is low, name what is helping instead.")
     microActions: list[EnergyMicroAction] = Field(description="Exactly 3 actionable micro-actions personalized to their dominant topics and drainers.")
     tomorrowFocus: str = Field(description="A 1-2 sentence strategy to build or protect energy for the next day, based on today's drainers.")
 
@@ -89,7 +89,7 @@ class FeedbackReportSchema(BaseModel):
     selfFocusFeedback: str = Field(description="Brief, gentle psychological insight about their focus balance.")
     repetitiveWords: list[str] = Field(description="List of words or short phrases overused in this entry (3-5 items).")
     repetitiveWordingFeedback: str = Field(description="Brief coaching tip on how to vary their vocabulary.")
-    detectedDecision: str | None = Field(default=None, description="If the user is struggling with a specific decision (e.g., 'Should I quit my job?'), summarize the topic here. Otherwise null.")
+    detectedDecision: str | None = Field(default=None, description="Only a choice the writer is still weighing between options (e.g., 'Should I quit my job?'), summarized. Plans, to-do items, goals and decisions already made are null.")
     emotionLabels: list[str] = Field(description="1-3 precise emotion words the writer is expressing (e.g. 'overwhelmed', 'wistful', 'resentful', 'proud'). Granular words, not generic ones like 'bad' or 'sad' unless truly the best fit.")
     distressFlag: bool = Field(description="True for self-harm, suicidal thoughts, an acute crisis, or a passive wish to die or vanish (wanting to disappear, not wanting to wake up, others better off without you, not seeing how to keep going). Ordinary sadness, stress, anger and figurative venting are False.")
     energyAnalysis: EnergyAnalysisSchema = Field(description="Analysis of the user's energy, control, and actionable steps.")
@@ -154,7 +154,17 @@ def perform_ai_analysis(text: str, preferences: dict = {}) -> tuple[FeedbackRepo
         "7. Mind: note attention trouble or brain fog the writer describes, minutes of passive feed or video consumption "
         "only when stated, whether short-form video is mentioned, and brain-building activities that actually happened "
         "(deep reading, learning, creating, deep work, exercise, nature, conversation, play, rest, sleep). brainRotLoad 0 "
-        "when nothing relevant is mentioned. Describe, never diagnose."
+        "when nothing relevant is mentioned. Describe, never diagnose.\n"
+        "8. Rumination: rate ruminationLevel from how the entry itself thinks, not from its topic. 'high' when it circles "
+        "the same worry or scene without moving on: replaying, 'what if', 'should have', 'over and over', 'can't stop "
+        "thinking'. 'moderate' when a worry comes back a few times but the entry also moves on. 'low' when it reflects, "
+        "plans, looks back on a hard time that has eased, or is grateful: naming a past struggle is not rumination. When "
+        "rumination is low, the coaching line names what is helping instead of warning about overthinking.\n"
+        "9. Decisions: set detectedDecision only when the writer is weighing a choice that is still open, between two or "
+        "more options ('Should I quit or stay?') and the entry leaves it unresolved: still deciding, torn, going back and "
+        "forth, has to choose. Plans, to-do lists, goals and decisions already made are not decisions: return null. A line "
+        "that reports a choice as made ('I made a clear decision about the startup', 'I decided to stay') is null, even "
+        "though it contains the word decision."
     )
     custom_persona = preferences.get("custom_persona_prompt", "")
     if custom_persona:
