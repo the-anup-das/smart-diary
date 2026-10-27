@@ -372,7 +372,7 @@ export default function ChatPage() {
           </button>
         </div>
         <p className="text-[11px] text-gray-400 text-center mt-2">
-          Answers come only from your own entries and stay on your server.
+          Answers come only from your own entries. With a local model, your entries never leave your server.
         </p>
       </div>
     </div>

@@ -29,6 +29,11 @@ services:
       - DATABASE_URL=postgresql://diary_user:diary_password@db:5432/diary_db
       - JWT_SECRET=super-secret-diary-key-you-should-change
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # For a local model, set OPENAI_BASE_URL to any OpenAI-compatible server (Ollama, LM Studio)
+      # and CHAT_MODEL / EMBEDDING_MODEL to its models. Same settings as deployment/omv/compose.yaml.
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       # STT: remove or leave blank to disable voice feature entirely
       - STT_BASE_URL=http://stt-server:8000/v1
       - STT_API_KEY=not-needed

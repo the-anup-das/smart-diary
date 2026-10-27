@@ -456,7 +456,7 @@ def get_intentions(
 
     try:
         response = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+            model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
             messages=[{"role": "system", "content": system_instruction}],
             response_format=DailyIntentionsSchema,
             temperature=0.7
