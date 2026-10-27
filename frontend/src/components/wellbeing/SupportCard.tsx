@@ -11,7 +11,8 @@ interface Helpline {
 const HELPLINES: Record<string, Helpline[]> = {
   india: [
     { name: "Tele-MANAS (Govt. of India, 24/7, free)", contact: "14416" },
-    { name: "KIRAN Mental Health Helpline (24/7)", contact: "1800-599-0019" },
+    // KIRAN (1800-599-0019) was merged into Tele-MANAS in Feb 2024; this is Tele-MANAS's toll-free line.
+    { name: "Tele-MANAS toll-free (24/7)", contact: "1-800-891-4416" },
   ],
   us: [
     { name: "988 Suicide & Crisis Lifeline (24/7)", contact: "Call or text 988" },
